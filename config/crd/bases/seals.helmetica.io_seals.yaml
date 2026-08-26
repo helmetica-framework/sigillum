@@ -1,0 +1,84 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: seals.seals.helmetica.io
+spec:
+  group: seals.helmetica.io
+  names:
+    kind: Seal
+    listKind: SealList
+    plural: seals
+    singular: seal
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.allowAllNamespaces
+      name: All Namespaces
+      type: boolean
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.message
+      name: Message
+      type: string
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: Seal is sigillum's placeholder resource.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: SealSpec describes who may reach the sealed namespace.
+            properties:
+              allowAllNamespaces:
+                description: |-
+                  AllowAllNamespaces allows access from every namespace in the cluster,
+                  effectively disabling the NetworkPolicy. It overrides AllowedNamespaces
+                  and the claim namespace. Traffic from outside the cluster stays blocked.
+                type: boolean
+              allowedNamespaces:
+                description: |-
+                  AllowedNamespaces names the namespaces that may reach this one, on top of
+                  the claim namespace the seal's own namespace is annotated with. Ignored
+                  when AllowAllNamespaces is true.
+                items:
+                  type: string
+                type: array
+            type: object
+          status:
+            properties:
+              message:
+                description: Message explains a Failed phase.
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the spec generation the phase was
+                  computed from.
+                format: int64
+                type: integer
+              phase:
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

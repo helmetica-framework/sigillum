@@ -1,0 +1,10 @@
+apiVersion: seals.helmetica.io/v1
+kind: Seal
+metadata:
+  name: sample
+spec:
+  allowedNamespaces:
+    - some-namespace
+  # Set this instead to let every namespace in the cluster reach this one.
+  # It overrides allowedNamespaces and the claim namespace.
+  # allowAllNamespaces: true
