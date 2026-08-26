@@ -1,4 +1,4 @@
-# sigillum
+# Sigillum
 
 **Sigillum**: a seal, the mark an alchemist presses into wax to close a
 vessel and show it hasn't been tampered with.
@@ -39,10 +39,6 @@ the CRDs separately from `config/crd` first:
 kubectl apply -k config/crd
 kubectl apply -k config/default
 ```
-
-This is intentional: CRDs are cluster-scoped and installing/upgrading them is
-a different concern than rolling the manager, so they're kept out of the
-namespaced `config/default` bundle.
 
 ## Structure
 
