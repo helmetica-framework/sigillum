@@ -3,6 +3,8 @@
 **Sigillum**: a seal, the mark an alchemist presses into wax to close a
 vessel and show it hasn't been tampered with.
 
+Sigillum handles all network related configurations, so that helmetica managed services are securely accessible.
+
 ## Quickstart
 
 Against a kind (or any) cluster:
