@@ -1,0 +1,6 @@
+resources:
+- bases/seals.helmetica.io_seals.yaml
+#+kubebuilder:scaffold:crdkustomizeresource
+
+configurations:
+- kustomizeconfig.yaml
