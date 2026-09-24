@@ -13,7 +13,7 @@ import (
 //
 // Seal is sigillum's placeholder resource.
 type SealApplyConfiguration struct {
-	metav1.TypeMetaApplyConfiguration    `json:",inline"`
+	metav1.TypeMetaApplyConfiguration    `json:""`
 	*metav1.ObjectMetaApplyConfiguration `json:"metadata,omitempty"`
 	Spec                                 *SealSpecApplyConfiguration   `json:"spec,omitempty"`
 	Status                               *SealStatusApplyConfiguration `json:"status,omitempty"`
