@@ -3,8 +3,11 @@
 package v1
 
 import (
+	apiv1 "github.com/helmetica-framework/sigillum/api/v1"
+	internal "github.com/helmetica-framework/sigillum/applyconfiguration/internal"
 	apismetav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	types "k8s.io/apimachinery/pkg/types"
+	managedfields "k8s.io/apimachinery/pkg/util/managedfields"
 	metav1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
@@ -28,6 +31,47 @@ func Seal(name, namespace string) *SealApplyConfiguration {
 	b.WithKind("Seal")
 	b.WithAPIVersion("seals.helmetica.io/v1")
 	return b
+}
+
+// ExtractSealFrom extracts the applied configuration owned by fieldManager from
+// seal for the specified subresource. Pass an empty string for subresource to extract
+// the main resource. Common subresources include "status", "scale", etc.
+// seal must be a unmodified Seal API object that was retrieved from the Kubernetes API.
+// ExtractSealFrom provides a way to perform a extract/modify-in-place/apply workflow.
+// Note that an extracted apply configuration will contain fewer fields than what the fieldManager previously
+// applied if another fieldManager has updated or force applied any of the previously applied fields.
+func ExtractSealFrom(seal *apiv1.Seal, fieldManager string, subresource string) (*SealApplyConfiguration, error) {
+	b := &SealApplyConfiguration{}
+	err := managedfields.ExtractInto(seal, internal.Parser().Type("com.github.helmetica-framework.sigillum.api.v1.Seal"), fieldManager, b, subresource)
+	if err != nil {
+		return nil, err
+	}
+	b.WithName(seal.Name)
+	b.WithNamespace(seal.Namespace)
+
+	b.WithKind("Seal")
+	b.WithAPIVersion("seals.helmetica.io/v1")
+	return b, nil
+}
+
+// ExtractSeal extracts the applied configuration owned by fieldManager from
+// seal. If no managedFields are found in seal for fieldManager, a
+// SealApplyConfiguration is returned with only the Name, Namespace (if applicable),
+// APIVersion and Kind populated. It is possible that no managed fields were found for because other
+// field managers have taken ownership of all the fields previously owned by fieldManager, or because
+// the fieldManager never owned fields any fields.
+// seal must be a unmodified Seal API object that was retrieved from the Kubernetes API.
+// ExtractSeal provides a way to perform a extract/modify-in-place/apply workflow.
+// Note that an extracted apply configuration will contain fewer fields than what the fieldManager previously
+// applied if another fieldManager has updated or force applied any of the previously applied fields.
+func ExtractSeal(seal *apiv1.Seal, fieldManager string) (*SealApplyConfiguration, error) {
+	return ExtractSealFrom(seal, fieldManager, "")
+}
+
+// ExtractSealStatus extracts the applied configuration owned by fieldManager from
+// seal for the status subresource.
+func ExtractSealStatus(seal *apiv1.Seal, fieldManager string) (*SealApplyConfiguration, error) {
+	return ExtractSealFrom(seal, fieldManager, "status")
 }
 
 func (b SealApplyConfiguration) IsApplyConfiguration() {}
