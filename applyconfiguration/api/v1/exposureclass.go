@@ -15,6 +15,10 @@ import (
 // with apply.
 //
 // ExposureClass describes how one protocol reaches the outside world.
+//
+// An exposure that names no class falls back to the class named after its
+// protocol, lowercased: TCP looks for "tcp", HTTPS for "https". There is no
+// default flag, so two classes can never both claim a protocol.
 type ExposureClassApplyConfiguration struct {
 	metav1.TypeMetaApplyConfiguration    `json:""`
 	*metav1.ObjectMetaApplyConfiguration `json:"metadata,omitempty"`

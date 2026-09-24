@@ -194,7 +194,6 @@ func TestExposureClassHTTPFieldsDeepCopy(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "public"},
 		Spec: ExposureClassSpec{
 			Type:      ExposureTypeGateway,
-			Default:   ptr.To(true),
 			Supports:  []Protocol{ProtocolHTTP, ProtocolHTTPS},
 			ParentRef: &ParentRef{Name: "web", Namespace: "kgateway-system"},
 			Domain:    "{{.Subdomain}}{{.Instance}}.apps.example.com",
@@ -208,11 +207,9 @@ func TestExposureClassHTTPFieldsDeepCopy(t *testing.T) {
 	cp := orig.DeepCopy()
 	require.Equal(t, orig, cp)
 
-	*cp.Spec.Default = false
 	cp.Spec.ParentRef.Name = "mutated"
 	cp.Spec.TLS.IssuerRef.Name = "mutated"
 
-	assert.True(t, *orig.Spec.Default, "deepcopy must not share the default pointer")
 	assert.Equal(t, "web", orig.Spec.ParentRef.Name, "deepcopy must not share the parentRef pointer")
 	assert.Equal(t, "letsencrypt", orig.Spec.TLS.IssuerRef.Name, "deepcopy must not share the issuerRef pointer")
 }

@@ -71,9 +71,6 @@ var schemaYAML = typed.YAMLObject(`types:
 - name: com.github.helmetica-framework.sigillum.api.v1.ExposureClassSpec
   map:
     fields:
-    - name: default
-      type:
-        scalar: boolean
     - name: domain
       type:
         scalar: string

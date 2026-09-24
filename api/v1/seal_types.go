@@ -47,7 +47,7 @@ type Exposure struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	Name string `json:"name"`
 
-	// Empty means the default class for this protocol.
+	// Empty means the class named after this exposure's protocol, lowercased.
 	// +optional
 	ExposureClass string `json:"exposureClass,omitempty"`
 

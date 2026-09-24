@@ -15,9 +15,6 @@ spec:
   scope: Cluster
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.default
-      name: Default
-      type: boolean
     - jsonPath: .spec.type
       name: Type
       type: string
@@ -27,8 +24,12 @@ spec:
     name: v1
     schema:
       openAPIV3Schema:
-        description: ExposureClass describes how one protocol reaches the outside
-          world.
+        description: |-
+          ExposureClass describes how one protocol reaches the outside world.
+
+          An exposure that names no class falls back to the class named after its
+          protocol, lowercased: TCP looks for "tcp", HTTPS for "https". There is no
+          default flag, so two classes can never both claim a protocol.
         properties:
           apiVersion:
             description: |-
@@ -51,8 +52,6 @@ spec:
             description: ExposureClassSpec describes how one protocol reaches the
               outside world.
             properties:
-              default:
-                type: boolean
               domain:
                 type: string
               gatewaySelector:

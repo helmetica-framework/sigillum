@@ -18,7 +18,7 @@ type ExposureApplyConfiguration struct {
 	// Name identifies the exposure within this Seal. It becomes the listener
 	// and route name, so it has to be a DNS label.
 	Name *string `json:"name,omitempty"`
-	// Empty means the default class for this protocol.
+	// Empty means the class named after this exposure's protocol, lowercased.
 	ExposureClass *string         `json:"exposureClass,omitempty"`
 	Protocol      *apiv1.Protocol `json:"protocol,omitempty"`
 	// Empty means no subdomain label. HTTP and HTTPS only.

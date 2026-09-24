@@ -12,7 +12,6 @@ import (
 //
 // ExposureClassSpec describes how one protocol reaches the outside world.
 type ExposureClassSpecApplyConfiguration struct {
-	Default       *bool                                   `json:"default,omitempty"`
 	Type          *apiv1.ExposureType                     `json:"type,omitempty"`
 	Supports      []apiv1.Protocol                        `json:"supports,omitempty"`
 	ParentRef     *ParentRefApplyConfiguration            `json:"parentRef,omitempty"`
@@ -30,14 +29,6 @@ type ExposureClassSpecApplyConfiguration struct {
 // apply.
 func ExposureClassSpec() *ExposureClassSpecApplyConfiguration {
 	return &ExposureClassSpecApplyConfiguration{}
-}
-
-// WithDefault sets the Default field in the declarative configuration to the given value
-// and returns the receiver, so that objects can be built by chaining "With" function invocations.
-// If called multiple times, the Default field is set to the value of the last call.
-func (b *ExposureClassSpecApplyConfiguration) WithDefault(value bool) *ExposureClassSpecApplyConfiguration {
-	b.Default = &value
-	return b
 }
 
 // WithType sets the Type field in the declarative configuration to the given value

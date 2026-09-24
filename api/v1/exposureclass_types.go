@@ -78,9 +78,6 @@ type ExposureTLS struct {
 
 // ExposureClassSpec describes how one protocol reaches the outside world.
 type ExposureClassSpec struct {
-	// +optional
-	Default *bool `json:"default,omitempty"`
-
 	Type ExposureType `json:"type"`
 
 	// +kubebuilder:validation:MinItems=1
@@ -123,10 +120,13 @@ type ExposureClassSpec struct {
 type ExposureClassStatus struct{}
 
 // ExposureClass describes how one protocol reaches the outside world.
+//
+// An exposure that names no class falls back to the class named after its
+// protocol, lowercased: TCP looks for "tcp", HTTPS for "https". There is no
+// default flag, so two classes can never both claim a protocol.
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Cluster
 // +kubebuilder:subresource:status
-// +kubebuilder:printcolumn:name="Default",type=boolean,JSONPath=`.spec.default`
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="Supports",type=string,JSONPath=`.spec.supports`
 type ExposureClass struct {

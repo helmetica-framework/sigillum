@@ -96,7 +96,8 @@ spec:
                       - service
                       type: object
                     exposureClass:
-                      description: Empty means the default class for this protocol.
+                      description: Empty means the class named after this exposure's
+                        protocol, lowercased.
                       type: string
                     name:
                       description: |-
