@@ -34,6 +34,12 @@ const (
 // SealManager reconciles Seal objects.
 type SealManager struct {
 	client.Client
+
+	// APIReader bypasses the cache. Port allocation needs it: the cache has
+	// not seen the ListenerSet this same controller wrote a moment ago, so a
+	// cached list would hand the same port to the next Seal.
+	APIReader client.Reader
+
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 	Log      logr.Logger

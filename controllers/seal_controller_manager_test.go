@@ -23,12 +23,14 @@ import (
 
 	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
 	sealsac "github.com/helmetica-framework/sigillum/applyconfiguration"
+	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 )
 
 func newTestScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(sealsv1.AddToScheme(scheme))
+	utilruntime.Must(gatewayapi.Register(scheme))
 	return scheme
 }
 
@@ -104,8 +106,11 @@ func newManagerInNamespace(ns *corev1.Namespace, objs ...client.Object) (*SealMa
 
 	return &SealManager{
 		Client: c,
-		Scheme: scheme,
-		Log:    logr.Discard(),
+		// The fake client serves both roles here. A test that needs the
+		// cached and uncached views to differ builds its own manager.
+		APIReader: c,
+		Scheme:    scheme,
+		Log:       logr.Discard(),
 	}, c
 }
 
