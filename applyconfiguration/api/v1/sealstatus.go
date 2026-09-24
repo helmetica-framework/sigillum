@@ -14,6 +14,11 @@ type SealStatusApplyConfiguration struct {
 	ObservedGeneration *int64 `json:"observedGeneration,omitempty"`
 	// Message explains a Failed phase.
 	Message *string `json:"message,omitempty"`
+	// Exposures reports one entry per Expose entry, in spec order. Every
+	// requested exposure appears here from the first reconcile, even before its
+	// class resolves: an empty list would read as "nothing was requested".
+	//
+	Exposures []ExposureStatusApplyConfiguration `json:"exposures,omitempty"`
 }
 
 // SealStatusApplyConfiguration constructs a declarative configuration of the SealStatus type for use with
@@ -43,5 +48,18 @@ func (b *SealStatusApplyConfiguration) WithObservedGeneration(value int64) *Seal
 // If called multiple times, the Message field is set to the value of the last call.
 func (b *SealStatusApplyConfiguration) WithMessage(value string) *SealStatusApplyConfiguration {
 	b.Message = &value
+	return b
+}
+
+// WithExposures adds the given value to the Exposures field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Exposures field.
+func (b *SealStatusApplyConfiguration) WithExposures(values ...*ExposureStatusApplyConfiguration) *SealStatusApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithExposures")
+		}
+		b.Exposures = append(b.Exposures, *values[i])
+	}
 	return b
 }

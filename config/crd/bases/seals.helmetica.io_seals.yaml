@@ -63,9 +63,118 @@ spec:
                 items:
                   type: string
                 type: array
+              expose:
+                description: |-
+                  Expose asks for ways into this namespace from outside the cluster.
+
+                  listType=map makes the API server reject duplicate names and makes
+                  server-side apply merge per entry rather than replacing the whole list.
+                items:
+                  description: |-
+                    Exposure asks for one way into the sealed namespace from outside the cluster.
+
+                    There is deliberately no port field. Sigillum allocates TCP ports itself and
+                    reports them in status; letting a user pick one would reintroduce the clash
+                    this controller exists to prevent.
+                  properties:
+                    backend:
+                      description: Backend names the in-namespace service an exposure
+                        points at.
+                      properties:
+                        port:
+                          format: int32
+                          maximum: 65535
+                          minimum: 1
+                          type: integer
+                        service:
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                      required:
+                      - port
+                      - service
+                      type: object
+                    exposureClass:
+                      description: Empty means the default class for this protocol.
+                      type: string
+                    name:
+                      description: |-
+                        Name identifies the exposure within this Seal. It becomes the listener
+                        and route name, so it has to be a DNS label.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    protocol:
+                      description: Protocol is what an exposure carries.
+                      enum:
+                      - HTTP
+                      - HTTPS
+                      - TCP
+                      type: string
+                    subdomain:
+                      description: Empty means no subdomain label. HTTP and HTTPS
+                        only.
+                      type: string
+                  required:
+                  - backend
+                  - name
+                  - protocol
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
             type: object
           status:
             properties:
+              exposures:
+                description: |-
+                  Exposures reports one entry per Expose entry, in spec order. Every
+                  requested exposure appears here from the first reconcile, even before its
+                  class resolves: an empty list would read as "nothing was requested".
+                items:
+                  description: ExposureStatus reports what an Exposure turned into.
+                  properties:
+                    address:
+                      type: string
+                    class:
+                      type: string
+                    conflictCount:
+                      description: |-
+                        ConflictCount stops a re-allocation loop when the gateway controller
+                        keeps rejecting the port it was given.
+                      format: int32
+                      minimum: 0
+                      type: integer
+                    hostname:
+                      type: string
+                    message:
+                      type: string
+                    name:
+                      maxLength: 63
+                      minLength: 1
+                      type: string
+                    port:
+                      format: int32
+                      maximum: 65535
+                      minimum: 1
+                      type: integer
+                    ready:
+                      type: boolean
+                    shard:
+                      type: string
+                    url:
+                      type: string
+                  required:
+                  - name
+                  - ready
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               message:
                 description: Message explains a Failed phase.
                 type: string

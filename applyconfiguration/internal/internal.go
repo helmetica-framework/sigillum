@@ -23,6 +23,181 @@ func Parser() *typed.Parser {
 var parserOnce sync.Once
 var parser *typed.Parser
 var schemaYAML = typed.YAMLObject(`types:
+- name: com.github.helmetica-framework.sigillum.api.v1.Backend
+  map:
+    fields:
+    - name: port
+      type:
+        scalar: numeric
+    - name: service
+      type:
+        scalar: string
+- name: com.github.helmetica-framework.sigillum.api.v1.Exposure
+  map:
+    fields:
+    - name: backend
+      type:
+        namedType: com.github.helmetica-framework.sigillum.api.v1.Backend
+    - name: exposureClass
+      type:
+        scalar: string
+    - name: name
+      type:
+        scalar: string
+    - name: protocol
+      type:
+        namedType: com.github.helmetica-framework.sigillum.api.v1.Protocol
+    - name: subdomain
+      type:
+        scalar: string
+- name: com.github.helmetica-framework.sigillum.api.v1.ExposureClass
+  map:
+    fields:
+    - name: apiVersion
+      type:
+        scalar: string
+    - name: kind
+      type:
+        scalar: string
+    - name: metadata
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
+    - name: spec
+      type:
+        namedType: com.github.helmetica-framework.sigillum.api.v1.ExposureClassSpec
+    - name: status
+      type:
+        namedType: com.github.helmetica-framework.sigillum.api.v1.ExposureClassStatus
+- name: com.github.helmetica-framework.sigillum.api.v1.ExposureClassSpec
+  map:
+    fields:
+    - name: default
+      type:
+        scalar: boolean
+    - name: domain
+      type:
+        scalar: string
+    - name: gatewaySelector
+      type:
+        namedType: com.github.helmetica-framework.sigillum.api.v1.GatewaySelector
+    - name: maxListenersPerShard
+      type:
+        scalar: numeric
+    - name: parentRef
+      type:
+        namedType: com.github.helmetica-framework.sigillum.api.v1.ParentRef
+    - name: portRange
+      type:
+        namedType: com.github.helmetica-framework.sigillum.api.v1.PortRange
+    - name: shardSelector
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector
+    - name: supports
+      type:
+        list:
+          elementType:
+            namedType: com.github.helmetica-framework.sigillum.api.v1.Protocol
+          elementRelationship: associative
+    - name: tls
+      type:
+        namedType: com.github.helmetica-framework.sigillum.api.v1.ExposureTLS
+    - name: type
+      type:
+        namedType: com.github.helmetica-framework.sigillum.api.v1.ExposureType
+- name: com.github.helmetica-framework.sigillum.api.v1.ExposureClassStatus
+  map:
+    elementType:
+      scalar: untyped
+      list:
+        elementType:
+          namedType: __untyped_atomic_
+        elementRelationship: atomic
+      map:
+        elementType:
+          namedType: __untyped_deduced_
+        elementRelationship: separable
+- name: com.github.helmetica-framework.sigillum.api.v1.ExposureStatus
+  map:
+    fields:
+    - name: address
+      type:
+        scalar: string
+    - name: class
+      type:
+        scalar: string
+    - name: conflictCount
+      type:
+        scalar: numeric
+    - name: hostname
+      type:
+        scalar: string
+    - name: message
+      type:
+        scalar: string
+    - name: name
+      type:
+        scalar: string
+    - name: port
+      type:
+        scalar: numeric
+    - name: ready
+      type:
+        scalar: boolean
+    - name: shard
+      type:
+        scalar: string
+    - name: url
+      type:
+        scalar: string
+- name: com.github.helmetica-framework.sigillum.api.v1.ExposureTLS
+  map:
+    fields:
+    - name: issuerRef
+      type:
+        namedType: com.github.helmetica-framework.sigillum.api.v1.IssuerRef
+    - name: mode
+      type:
+        namedType: com.github.helmetica-framework.sigillum.api.v1.TLSMode
+- name: com.github.helmetica-framework.sigillum.api.v1.ExposureType
+  scalar: string
+- name: com.github.helmetica-framework.sigillum.api.v1.GatewaySelector
+  map:
+    fields:
+    - name: namespaceSelector
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector
+    - name: podSelector
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector
+- name: com.github.helmetica-framework.sigillum.api.v1.IssuerRef
+  map:
+    fields:
+    - name: kind
+      type:
+        scalar: string
+    - name: name
+      type:
+        scalar: string
+- name: com.github.helmetica-framework.sigillum.api.v1.ParentRef
+  map:
+    fields:
+    - name: name
+      type:
+        scalar: string
+    - name: namespace
+      type:
+        scalar: string
+- name: com.github.helmetica-framework.sigillum.api.v1.PortRange
+  map:
+    fields:
+    - name: from
+      type:
+        scalar: numeric
+    - name: to
+      type:
+        scalar: numeric
+- name: com.github.helmetica-framework.sigillum.api.v1.Protocol
+  scalar: string
 - name: com.github.helmetica-framework.sigillum.api.v1.Seal
   map:
     fields:
@@ -55,9 +230,25 @@ var schemaYAML = typed.YAMLObject(`types:
           elementType:
             scalar: string
           elementRelationship: atomic
+    - name: expose
+      type:
+        list:
+          elementType:
+            namedType: com.github.helmetica-framework.sigillum.api.v1.Exposure
+          elementRelationship: associative
+          keys:
+          - name
 - name: com.github.helmetica-framework.sigillum.api.v1.SealStatus
   map:
     fields:
+    - name: exposures
+      type:
+        list:
+          elementType:
+            namedType: com.github.helmetica-framework.sigillum.api.v1.ExposureStatus
+          elementRelationship: associative
+          keys:
+          - name
     - name: message
       type:
         scalar: string
@@ -67,6 +258,8 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: phase
       type:
         namedType: com.github.helmetica-framework.sigillum.api.v1.SealPhase
+- name: com.github.helmetica-framework.sigillum.api.v1.TLSMode
+  scalar: string
 - name: io.k8s.apimachinery.pkg.apis.meta.v1.FieldsV1
   map:
     elementType:
@@ -79,6 +272,38 @@ var schemaYAML = typed.YAMLObject(`types:
         elementType:
           namedType: __untyped_deduced_
         elementRelationship: separable
+- name: io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelector
+  map:
+    fields:
+    - name: matchExpressions
+      type:
+        list:
+          elementType:
+            namedType: io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelectorRequirement
+          elementRelationship: atomic
+    - name: matchLabels
+      type:
+        map:
+          elementType:
+            scalar: string
+    elementRelationship: atomic
+- name: io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelectorOperator
+  scalar: string
+- name: io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelectorRequirement
+  map:
+    fields:
+    - name: key
+      type:
+        scalar: string
+    - name: operator
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.LabelSelectorOperator
+    - name: values
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: atomic
 - name: io.k8s.apimachinery.pkg.apis.meta.v1.ManagedFieldsEntry
   map:
     fields:
