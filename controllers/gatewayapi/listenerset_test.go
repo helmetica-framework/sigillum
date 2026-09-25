@@ -174,3 +174,32 @@ func TestListeners_KeepsAnEntryWithNoProtocol(t *testing.T) {
 	assert.EqualValues(t, 30007, got[0].Port)
 	assert.Empty(t, got[0].Protocol)
 }
+
+// Gateway API reads an omitted parentRef namespace as the object's own
+// namespace. An empty string is not a namespace any real Gateway has, so a
+// shard key carrying one matches nothing and its listeners go uncounted.
+func TestParentShard_NoNamespaceKeyMeansTheObjectsOwn(t *testing.T) {
+	obj := rawListenerSet(t, map[string]any{
+		"parentRef": map[string]any{
+			"group": ListenerSetGVK.Group,
+			"kind":  "Gateway",
+			"name":  "tcp-0",
+		},
+	})
+
+	got, ok := ParentShard(obj)
+
+	require.True(t, ok)
+	assert.Equal(t, ShardRef{Name: "tcp-0", Namespace: "redis-7f3"}, got)
+}
+
+func TestParentShard_EmptyNamespaceMeansTheObjectsOwn(t *testing.T) {
+	obj := rawListenerSet(t, map[string]any{
+		"parentRef": parentRef("tcp-0", ""),
+	})
+
+	got, ok := ParentShard(obj)
+
+	require.True(t, ok)
+	assert.Equal(t, ShardRef{Name: "tcp-0", Namespace: "redis-7f3"}, got)
+}

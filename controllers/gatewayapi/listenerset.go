@@ -38,6 +38,13 @@ func ParentShard(obj *unstructured.Unstructured) (ShardRef, bool) {
 		return ShardRef{}, false
 	}
 
+	// Gateway API reads an omitted namespace as the object's own. Leaving it
+	// empty would build a shard key no real Gateway matches, so the set's
+	// listeners would count against nothing.
+	if namespace == "" {
+		namespace = obj.GetNamespace()
+	}
+
 	return ShardRef{
 		Name:      name,
 		Namespace: namespace,
