@@ -130,7 +130,7 @@ func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (pha
 	}
 
 	np := netv1ac.NetworkPolicy(policyName, seal.GetNamespace()).
-		WithOwnerReferences(owner).
+		WithOwnerReferences(ownerRefAC(owner)).
 		WithSpec(netv1ac.NetworkPolicySpec().
 			// An empty selector matches every pod, so the policy covers the
 			// whole namespace. Apply only sends the fields set here, and
@@ -146,22 +146,38 @@ func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (pha
 	return phase{Phase: sealsv1.SealPhaseReady, Message: "networkpolicy applied"}, nil
 }
 
-// controllerRef builds the seal's controller owner reference as an apply
-// configuration. controllerutil.SetControllerReference cannot be used here:
-// it takes a metav1.Object, and an apply configuration is not one.
-func controllerRef(seal *sealsv1.Seal, scheme *runtime.Scheme) (*metav1ac.OwnerReferenceApplyConfiguration, error) {
+// controllerRef builds the seal's controller owner reference.
+// controllerutil.SetControllerReference cannot be used here: it takes a
+// metav1.Object, and neither an apply configuration nor a half-built
+// unstructured object is one.
+//
+// The plain struct is the common form. The typed apply paths convert it with
+// ownerRefAC; the unstructured builders take it as it is.
+func controllerRef(seal *sealsv1.Seal, scheme *runtime.Scheme) (metav1.OwnerReference, error) {
 	gvk, err := apiutil.GVKForObject(seal, scheme)
 	if err != nil {
-		return nil, err
+		return metav1.OwnerReference{}, err
 	}
 
+	return metav1.OwnerReference{
+		APIVersion:         gvk.GroupVersion().String(),
+		Kind:               gvk.Kind,
+		Name:               seal.GetName(),
+		UID:                seal.GetUID(),
+		Controller:         ptr.To(true),
+		BlockOwnerDeletion: ptr.To(true),
+	}, nil
+}
+
+// ownerRefAC turns a plain owner reference into the apply-configuration form.
+func ownerRefAC(ref metav1.OwnerReference) *metav1ac.OwnerReferenceApplyConfiguration {
 	return metav1ac.OwnerReference().
-		WithAPIVersion(gvk.GroupVersion().String()).
-		WithKind(gvk.Kind).
-		WithName(seal.GetName()).
-		WithUID(seal.GetUID()).
-		WithController(true).
-		WithBlockOwnerDeletion(true), nil
+		WithAPIVersion(ref.APIVersion).
+		WithKind(ref.Kind).
+		WithName(ref.Name).
+		WithUID(ref.UID).
+		WithController(ptr.Deref(ref.Controller, false)).
+		WithBlockOwnerDeletion(ptr.Deref(ref.BlockOwnerDeletion, false))
 }
 
 // ingressPeers works out who may reach this namespace, and reports whether

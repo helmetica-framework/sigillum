@@ -5,7 +5,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/utils/ptr"
 )
 
 // rawListenerSet builds a ListenerSet from raw maps, so a test can put values
@@ -202,4 +204,203 @@ func TestParentShard_EmptyNamespaceMeansTheObjectsOwn(t *testing.T) {
 
 	require.True(t, ok)
 	assert.Equal(t, ShardRef{Name: "tcp-0", Namespace: "redis-7f3"}, got)
+}
+
+// sealOwner is the controller owner reference a Seal produces.
+func sealOwner() metav1.OwnerReference {
+	return metav1.OwnerReference{
+		APIVersion:         "seals.helmetica.io/v1",
+		Kind:               "Seal",
+		Name:               "networkconfig",
+		UID:                "11111111-2222-3333-4444-555555555555",
+		Controller:         ptr.To(true),
+		BlockOwnerDeletion: ptr.To(true),
+	}
+}
+
+// builtSet is BuildListenerSet over the common case, so a test can assert one
+// thing without repeating five arguments.
+func builtSet(t *testing.T, listeners ...Listener) *unstructured.Unstructured {
+	t.Helper()
+
+	obj, err := BuildListenerSet(
+		"networkconfig", "redis-7f3",
+		ShardRef{Name: "tcp-0", Namespace: "kgateway-system"},
+		listeners, sealOwner(),
+	)
+	require.NoError(t, err)
+
+	return obj
+}
+
+func TestBuildListenerSet_ShapeAndNames(t *testing.T) {
+	obj := builtSet(t, Listener{Name: "direct", Protocol: "TCP", Port: 30007})
+
+	require.NotNil(t, obj)
+	assert.Equal(t, ListenerSetGVK, obj.GroupVersionKind())
+	assert.Equal(t, "networkconfig", obj.GetName())
+	assert.Equal(t, "redis-7f3", obj.GetNamespace())
+}
+
+func TestBuildListenerSet_ParentRefPointsAtTheShardGateway(t *testing.T) {
+	obj := builtSet(t, Listener{Name: "direct", Protocol: "TCP", Port: 30007})
+	require.NotNil(t, obj)
+
+	parent, found, err := unstructured.NestedMap(obj.Object, "spec", "parentRef")
+
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "tcp-0", parent["name"])
+	assert.Equal(t, "kgateway-system", parent["namespace"])
+	assert.Equal(t, "Gateway", parent["kind"])
+	assert.Equal(t, ListenerSetGVK.Group, parent["group"])
+}
+
+func TestBuildListenerSet_WritesPortsAsInt64(t *testing.T) {
+	obj := builtSet(t, Listener{Name: "direct", Protocol: "TCP", Port: 30007})
+	require.NotNil(t, obj)
+
+	listeners, found, err := unstructured.NestedSlice(obj.Object, "spec", "listeners")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, listeners, 1)
+
+	l := listeners[0].(map[string]any)
+	assert.Equal(t, "direct", l["name"])
+	assert.Equal(t, "TCP", l["protocol"])
+	assert.Equal(t, int64(30007), l["port"], "unstructured only accepts int64 for numbers")
+}
+
+func TestBuildListenerSet_EveryListenerAllowsItsOwnNamespaceOnly(t *testing.T) {
+	obj := builtSet(t,
+		Listener{Name: "direct", Protocol: "TCP", Port: 30007},
+		Listener{Name: "admin", Protocol: "TCP", Port: 30008},
+	)
+	require.NotNil(t, obj)
+
+	listeners, _, _ := unstructured.NestedSlice(obj.Object, "spec", "listeners")
+	require.Len(t, listeners, 2)
+
+	for _, raw := range listeners {
+		from, found, err := unstructured.NestedString(raw.(map[string]any),
+			"allowedRoutes", "namespaces", "from")
+
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "Same", from,
+			"a route from another namespace must not be able to claim this port")
+	}
+}
+
+func TestBuildListenerSet_SetsTheControllerOwnerReference(t *testing.T) {
+	obj := builtSet(t, Listener{Name: "direct", Protocol: "TCP", Port: 30007})
+	require.NotNil(t, obj)
+
+	refs := obj.GetOwnerReferences()
+
+	require.Len(t, refs, 1)
+	assert.Equal(t, "Seal", refs[0].Kind)
+	assert.Equal(t, "networkconfig", refs[0].Name)
+	assert.EqualValues(t, "11111111-2222-3333-4444-555555555555", refs[0].UID)
+	assert.True(t, *refs[0].Controller)
+	assert.True(t, *refs[0].BlockOwnerDeletion,
+		"the ListenerSet must go when the Seal goes")
+}
+
+func TestBuildListenerSet_NoListenersReturnsNil(t *testing.T) {
+	assert.Nil(t, builtSet(t),
+		"an empty ListenerSet is invalid, so the caller must delete instead of apply")
+}
+
+func TestBuildListenerSet_RoundTripsThroughListeners(t *testing.T) {
+	in := []Listener{
+		{Name: "direct", Protocol: "TCP", Port: 30007},
+		{Name: "admin", Protocol: "TCP", Port: 30008},
+	}
+
+	assert.Equal(t, in, Listeners(builtSet(t, in...)),
+		"the reader and the builder have to agree, or allocation miscounts")
+}
+
+func TestBuildListenerSet_KeepsListenerOrder(t *testing.T) {
+	obj := builtSet(t,
+		Listener{Name: "zeta", Protocol: "TCP", Port: 30009},
+		Listener{Name: "alpha", Protocol: "TCP", Port: 30001},
+	)
+
+	got := Listeners(obj)
+
+	require.Len(t, got, 2)
+	assert.Equal(t, "zeta", got[0].Name, "order must follow the caller, not sort")
+}
+
+// DeepCopy walks every value and panics on a type unstructured cannot hold,
+// which is what an int32 port would be.
+func TestBuildListenerSet_SurvivesTheUnstructuredConverter(t *testing.T) {
+	obj := builtSet(t, Listener{Name: "direct", Protocol: "TCP", Port: 30007})
+	require.NotNil(t, obj)
+
+	assert.NotPanics(t, func() { _ = obj.DeepCopy() })
+}
+
+// buildSet is builtSet without the NoError, for the tests that want the error.
+func buildSet(parent ShardRef, listeners ...Listener) (*unstructured.Unstructured, error) {
+	return BuildListenerSet("networkconfig", "redis-7f3", parent, listeners, sealOwner())
+}
+
+// A nameless parent reads back as no parent at all, so the set's ports would be
+// invisible to allocation and handed to a second Seal.
+func TestBuildListenerSet_ParentWithNoNameIsAnError(t *testing.T) {
+	obj, err := buildSet(ShardRef{Namespace: "kgateway-system"},
+		Listener{Name: "direct", Protocol: "TCP", Port: 30007})
+
+	require.Error(t, err)
+	assert.Nil(t, obj, "an error must not look like the delete signal")
+}
+
+// Listeners drops a port outside 1..65535, so writing one would hide a claimed
+// port from allocation.
+func TestBuildListenerSet_PortOutsideTheRangeIsAnError(t *testing.T) {
+	for _, port := range []int32{0, -1, 70000} {
+		obj, err := buildSet(ShardRef{Name: "tcp-0", Namespace: "kgateway-system"},
+			Listener{Name: "bad", Protocol: "TCP", Port: port})
+
+		require.Error(t, err, "port %d", port)
+		assert.Nil(t, obj, "port %d", port)
+	}
+}
+
+func TestBuildListenerSet_ErrorNamesThePortAndTheListener(t *testing.T) {
+	_, err := buildSet(ShardRef{Name: "tcp-0", Namespace: "kgateway-system"},
+		Listener{Name: "direct", Protocol: "TCP", Port: 30007},
+		Listener{Name: "admin", Protocol: "TCP", Port: 99999})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "admin", "the listener must be named")
+	assert.Contains(t, err.Error(), "99999", "the bad value must be shown")
+}
+
+// The delete signal stays distinct: no listeners is not a failure.
+func TestBuildListenerSet_NoListenersIsNilWithNoError(t *testing.T) {
+	obj, err := buildSet(ShardRef{Name: "tcp-0", Namespace: "kgateway-system"})
+
+	require.NoError(t, err)
+	assert.Nil(t, obj)
+}
+
+// The point of both guards: nothing the builder writes can be unreadable.
+func TestBuildListenerSet_EverythingItWritesIsReadable(t *testing.T) {
+	in := []Listener{
+		{Name: "direct", Protocol: "TCP", Port: 1},
+		{Name: "admin", Protocol: "TCP", Port: 65535},
+	}
+	parent := ShardRef{Name: "tcp-0", Namespace: "kgateway-system"}
+
+	obj, err := buildSet(parent, in...)
+	require.NoError(t, err)
+
+	got, ok := ParentShard(obj)
+	require.True(t, ok)
+	assert.Equal(t, parent, got)
+	assert.Equal(t, in, Listeners(obj))
 }
