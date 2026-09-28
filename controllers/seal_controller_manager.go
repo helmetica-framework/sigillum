@@ -2,7 +2,11 @@ package controllers
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
@@ -118,7 +122,26 @@ func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (pha
 		return phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}, errf
 	}
 
-	peers, provision := ingressPeers(seal, instanceNS)
+	var selectors []sealsv1.GatewaySelector
+	if len(seal.Spec.Expose) > 0 {
+		classes := &sealsv1.ExposureClassList{}
+		if err := r.List(ctx, classes); err != nil {
+			errf := fmt.Errorf("listing exposure classes: %w", err)
+			return phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}, errf
+		}
+
+		selectors, err = gatewaySelectors(classes.Items, seal.Spec.Expose)
+		if errors.Is(err, errClassNotFound) {
+			// Leave the live policy alone: rewriting it without this class's
+			// peer would cut the gateway off because of an operator mistake.
+			return phase{Phase: sealsv1.SealPhaseFailed, Message: err.Error()}, nil
+		}
+		if err != nil {
+			return phase{Phase: sealsv1.SealPhaseFailed, Message: err.Error()}, err
+		}
+	}
+
+	peers, provision := ingressPeers(seal, instanceNS, selectors)
 	if !provision {
 		return phase{Phase: sealsv1.SealPhaseReady, Message: "empty config, skipping provisioning"}, nil
 	}
@@ -182,7 +205,15 @@ func ownerRefAC(ref metav1.OwnerReference) *metav1ac.OwnerReferenceApplyConfigur
 
 // ingressPeers works out who may reach this namespace, and reports whether
 // there is anything to provision at all. AllowAllNamespaces takes precedence.
-func ingressPeers(seal *sealsv1.Seal, instanceNS *corev1.Namespace) ([]*netv1ac.NetworkPolicyPeerApplyConfiguration, bool) {
+//
+// gwSelectors come from the ExposureClasses this seal's exposures resolved
+// to. Without a peer for the gateway pods, the policy blocks the very traffic
+// the exposure exists to allow.
+func ingressPeers(
+	seal *sealsv1.Seal,
+	instanceNS *corev1.Namespace,
+	gwSelectors []sealsv1.GatewaySelector,
+) ([]*netv1ac.NetworkPolicyPeerApplyConfiguration, bool) {
 	if ptr.Deref(seal.Spec.AllowAllNamespaces, false) {
 		// A selector that matches no labels matches every namespace.
 		return []*netv1ac.NetworkPolicyPeerApplyConfiguration{
@@ -197,12 +228,16 @@ func ingressPeers(seal *sealsv1.Seal, instanceNS *corev1.Namespace) ([]*netv1ac.
 	}
 
 	// let's not create an allow all by mistake
-	if !ok && len(seal.Spec.AllowedNamespaces) == 0 {
+	if !ok && len(seal.Spec.AllowedNamespaces) == 0 && len(gwSelectors) == 0 {
 		return nil, false
 	}
 
 	for _, ns := range seal.Spec.AllowedNamespaces {
 		peers = append(peers, nsPeer(ns))
+	}
+
+	for _, sel := range dedupeSelectors(gwSelectors) {
+		peers = append(peers, gatewayPeer(sel))
 	}
 
 	return peers, true
@@ -212,6 +247,95 @@ func nsPeer(ns string) *netv1ac.NetworkPolicyPeerApplyConfiguration {
 	return netv1ac.NetworkPolicyPeer().
 		WithNamespaceSelector(metav1ac.LabelSelector().
 			WithMatchLabels(map[string]string{kubeMetadataNameLabel: ns}))
+}
+
+// gatewaySelectors collects the gateway selectors of the classes this seal's
+// exposures resolve to.
+//
+// Only TCP exposures count: HTTP is not served yet, and a peer for a route
+// that does not exist opens the namespace for nothing.
+//
+// A missing class is returned as an error wrapping errClassNotFound. Any other
+// resolve error skips that exposure: it gets no route, so it needs no peer.
+func gatewaySelectors(classes []sealsv1.ExposureClass, exposures []sealsv1.Exposure) ([]sealsv1.GatewaySelector, error) {
+	selectors := make([]sealsv1.GatewaySelector, 0, len(exposures))
+
+	for _, e := range exposures {
+		if e.Protocol != sealsv1.ProtocolTCP {
+			continue
+		}
+
+		ec, err := resolveClass(classes, e)
+		if errors.Is(err, errClassNotFound) {
+			return nil, fmt.Errorf("collecting gateway selectors: %w", err)
+		}
+		if err != nil {
+			// we skip any other errors
+			continue
+		}
+
+		sel := ec.Spec.GatewaySelector
+		if sel == nil || (sel.NamespaceSelector == nil && sel.PodSelector == nil) {
+			continue
+		}
+
+		selectors = append(selectors, *sel)
+	}
+
+	return selectors, nil
+}
+
+// dedupeSelectors drops repeated selectors and sorts the rest, so two
+// exposures on one class give one peer, and the policy is not rewritten on
+// every reconcile because the order changed.
+func dedupeSelectors(sels []sealsv1.GatewaySelector) []sealsv1.GatewaySelector {
+	dedupMap := make(map[string]sealsv1.GatewaySelector, len(sels))
+
+	for _, sel := range sels {
+		key, _ := json.Marshal(sel)
+		dedupMap[string(key)] = sel
+	}
+
+	keys := slices.Sorted(maps.Keys(dedupMap))
+
+	deduped := make([]sealsv1.GatewaySelector, 0, len(keys))
+	for _, k := range keys {
+		deduped = append(deduped, dedupMap[k])
+	}
+
+	return deduped
+}
+
+// gatewayPeer is the ingress peer for one class's gateway pods.
+func gatewayPeer(sel sealsv1.GatewaySelector) *netv1ac.NetworkPolicyPeerApplyConfiguration {
+	peer := netv1ac.NetworkPolicyPeer()
+	if ns := labelSelectorAC(sel.NamespaceSelector); ns != nil {
+		peer.WithNamespaceSelector(ns)
+	}
+	if pod := labelSelectorAC(sel.PodSelector); pod != nil {
+		peer.WithPodSelector(pod)
+	}
+
+	return peer
+}
+
+// labelSelectorAC turns a label selector into its apply-configuration form.
+// A nil selector stays nil: an empty one would match everything.
+func labelSelectorAC(sel *metav1.LabelSelector) *metav1ac.LabelSelectorApplyConfiguration {
+	if sel == nil {
+		return nil
+	}
+
+	ac := metav1ac.LabelSelector().WithMatchLabels(sel.MatchLabels)
+
+	for _, r := range sel.MatchExpressions {
+		ac.WithMatchExpressions(metav1ac.LabelSelectorRequirement().
+			WithKey(r.Key).
+			WithOperator(r.Operator).
+			WithValues(r.Values...))
+	}
+
+	return ac
 }
 
 // SetupWithManager wires the controller: watch Seal. Nothing else is owned

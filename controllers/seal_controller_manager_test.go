@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -15,6 +16,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/managedfields"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
+	netv1ac "k8s.io/client-go/applyconfigurations/networking/v1"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -440,4 +443,352 @@ func TestReconcile_StatusIsAppliedBySigillum(t *testing.T) {
 	assert.Contains(t, owned, "f:phase", "sigillum must own status.phase")
 	assert.Contains(t, owned, "f:observedGeneration", "sigillum must own status.observedGeneration")
 	assert.Contains(t, owned, "f:message", "sigillum must own status.message")
+}
+
+func gatewaySel(ns, app string) sealsv1.GatewaySelector {
+	return sealsv1.GatewaySelector{
+		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{kubeMetadataNameLabel: ns}},
+		PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": app}},
+	}
+}
+
+// wantGatewayPeer is the apply configuration ingressPeers should build for
+// gatewaySel(ns, app).
+func wantGatewayPeer(ns, app string) *netv1ac.NetworkPolicyPeerApplyConfiguration {
+	return netv1ac.NetworkPolicyPeer().
+		WithNamespaceSelector(metav1ac.LabelSelector().
+			WithMatchLabels(map[string]string{kubeMetadataNameLabel: ns})).
+		WithPodSelector(metav1ac.LabelSelector().
+			WithMatchLabels(map[string]string{"app.kubernetes.io/name": app}))
+}
+
+// expectedGatewayPeer is wantGatewayPeer as the API object read back from the
+// fake client.
+func expectedGatewayPeer(ns, app string) netv1.NetworkPolicyPeer {
+	return netv1.NetworkPolicyPeer{
+		NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{kubeMetadataNameLabel: ns}},
+		PodSelector:       &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": app}},
+	}
+}
+
+// gatewayClass is a class for p whose gateway pods live in kgateway-system.
+func gatewayClass(name string, p sealsv1.Protocol) *sealsv1.ExposureClass {
+	c := class(name, p)
+	sel := gatewaySel("kgateway-system", "kgateway")
+	c.Spec.GatewaySelector = &sel
+
+	return &c
+}
+
+func TestIngressPeers_ExposureAddsAGatewayPeer(t *testing.T) {
+	sels := []sealsv1.GatewaySelector{gatewaySel("kgateway-system", "kgateway")}
+
+	peers, provision := ingressPeers(seal(1), namespace(nil), sels)
+
+	require.True(t, provision, "an exposure is a config, so a policy must be written")
+	assert.Equal(t,
+		[]*netv1ac.NetworkPolicyPeerApplyConfiguration{wantGatewayPeer("kgateway-system", "kgateway")},
+		peers)
+}
+
+func TestIngressPeers_GatewayPeerComesAfterTheClaimPeer(t *testing.T) {
+	ns := namespace(map[string]string{claimNamespaceAnnotation: "orders"})
+	sels := []sealsv1.GatewaySelector{gatewaySel("kgateway-system", "kgateway")}
+
+	peers, provision := ingressPeers(seal(1), ns, sels)
+
+	require.True(t, provision)
+	assert.Equal(t, []*netv1ac.NetworkPolicyPeerApplyConfiguration{
+		nsPeer("orders"),
+		wantGatewayPeer("kgateway-system", "kgateway"),
+	}, peers)
+}
+
+func TestIngressPeers_GatewayPeerComesAfterAllowedNamespaces(t *testing.T) {
+	s := seal(1)
+	s.Spec.AllowedNamespaces = []string{"team-a"}
+	sels := []sealsv1.GatewaySelector{gatewaySel("kgateway-system", "kgateway")}
+
+	peers, _ := ingressPeers(s, namespace(nil), sels)
+
+	assert.Equal(t, []*netv1ac.NetworkPolicyPeerApplyConfiguration{
+		nsPeer("team-a"),
+		wantGatewayPeer("kgateway-system", "kgateway"),
+	}, peers)
+}
+
+func TestIngressPeers_DuplicateSelectorsCollapseToOnePeer(t *testing.T) {
+	sels := []sealsv1.GatewaySelector{
+		gatewaySel("kgateway-system", "kgateway"),
+		gatewaySel("kgateway-system", "kgateway"),
+	}
+
+	peers, _ := ingressPeers(seal(1), namespace(nil), sels)
+
+	assert.Len(t, peers, 1, "two exposures on one class must not double the peer")
+}
+
+func TestIngressPeers_NoExposuresBehavesAsBefore(t *testing.T) {
+	peers, provision := ingressPeers(seal(1), namespace(nil), nil)
+
+	assert.False(t, provision, "an empty seal must still write no policy at all")
+	assert.Nil(t, peers)
+}
+
+// An empty namespaceSelector matches every namespace, the gateway's included.
+// A later change that appends gateway peers here too would look harmless and
+// widen nothing, but it would stop allow-all from being one plain peer.
+func TestIngressPeers_AllowAllNamespacesStillWinsOverGatewayPeers(t *testing.T) {
+	s := seal(1)
+	s.Spec.AllowAllNamespaces = ptr.To(true)
+	sels := []sealsv1.GatewaySelector{gatewaySel("kgateway-system", "kgateway")}
+
+	peers, provision := ingressPeers(s, namespace(nil), sels)
+
+	require.True(t, provision)
+	assert.Equal(t, []*netv1ac.NetworkPolicyPeerApplyConfiguration{
+		netv1ac.NetworkPolicyPeer().WithNamespaceSelector(metav1ac.LabelSelector()),
+	}, peers)
+}
+
+// Class list order is whatever the API server returned. If that leaked into
+// the peer order, every reconcile would rewrite the policy.
+func TestIngressPeers_PeerOrderDoesNotDependOnInputOrder(t *testing.T) {
+	a := gatewaySel("kgateway-system", "kgateway")
+	b := gatewaySel("other-system", "other")
+
+	first, _ := ingressPeers(seal(1), namespace(nil), []sealsv1.GatewaySelector{a, b})
+	second, _ := ingressPeers(seal(1), namespace(nil), []sealsv1.GatewaySelector{b, a})
+
+	assert.Equal(t, first, second)
+}
+
+func TestDedupeSelectors_DropsRepeats(t *testing.T) {
+	a := gatewaySel("kgateway-system", "kgateway")
+	b := gatewaySel("other-system", "other")
+
+	got := dedupeSelectors([]sealsv1.GatewaySelector{a, b, a})
+
+	assert.Len(t, got, 2)
+}
+
+func TestDedupeSelectors_OrderIsStable(t *testing.T) {
+	a := gatewaySel("kgateway-system", "kgateway")
+	b := gatewaySel("other-system", "other")
+
+	assert.Equal(t,
+		dedupeSelectors([]sealsv1.GatewaySelector{a, b}),
+		dedupeSelectors([]sealsv1.GatewaySelector{b, a}))
+}
+
+// A nil namespaceSelector means "this namespace". An empty one means "every
+// namespace". Treating them as the same would drop one of two real peers.
+func TestDedupeSelectors_KeepsNilAndEmptyApart(t *testing.T) {
+	pods := &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "kgateway"}}
+	local := sealsv1.GatewaySelector{PodSelector: pods}
+	everywhere := sealsv1.GatewaySelector{NamespaceSelector: &metav1.LabelSelector{}, PodSelector: pods}
+
+	got := dedupeSelectors([]sealsv1.GatewaySelector{local, everywhere})
+
+	assert.Len(t, got, 2)
+}
+
+func TestDedupeSelectors_Empty(t *testing.T) {
+	assert.Empty(t, dedupeSelectors(nil))
+}
+
+func TestLabelSelectorAC_CopiesLabelsAndExpressions(t *testing.T) {
+	sel := &metav1.LabelSelector{
+		MatchLabels: map[string]string{"app.kubernetes.io/name": "kgateway"},
+		MatchExpressions: []metav1.LabelSelectorRequirement{{
+			Key:      "tier",
+			Operator: metav1.LabelSelectorOpIn,
+			Values:   []string{"edge", "public"},
+		}},
+	}
+
+	got := labelSelectorAC(sel)
+
+	assert.Equal(t, metav1ac.LabelSelector().
+		WithMatchLabels(map[string]string{"app.kubernetes.io/name": "kgateway"}).
+		WithMatchExpressions(metav1ac.LabelSelectorRequirement().
+			WithKey("tier").
+			WithOperator(metav1.LabelSelectorOpIn).
+			WithValues("edge", "public")),
+		got)
+}
+
+func TestLabelSelectorAC_NilStaysNil(t *testing.T) {
+	assert.Nil(t, labelSelectorAC(nil), "an empty selector would match every namespace")
+}
+
+func TestLabelSelectorAC_EmptyStaysEmpty(t *testing.T) {
+	assert.Equal(t, metav1ac.LabelSelector(), labelSelectorAC(&metav1.LabelSelector{}))
+}
+
+// Only a pod selector means gateway pods in the seal's own namespace. The
+// peer must not gain a namespaceSelector on the way.
+func TestGatewayPeer_OnlyPodSelector(t *testing.T) {
+	sel := sealsv1.GatewaySelector{
+		PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app.kubernetes.io/name": "kgateway"}},
+	}
+
+	got := gatewayPeer(sel)
+
+	require.NotNil(t, got)
+	assert.Nil(t, got.NamespaceSelector)
+	assert.NotNil(t, got.PodSelector)
+}
+
+func tcpExposureOn(className string) sealsv1.Exposure {
+	e := tcpExposure("direct", 6379)
+	e.ExposureClass = className
+
+	return e
+}
+
+func TestGatewaySelectors_TCPExposureUsesItsClass(t *testing.T) {
+	classes := []sealsv1.ExposureClass{*gatewayClass("tcp", sealsv1.ProtocolTCP)}
+
+	got, err := gatewaySelectors(classes, []sealsv1.Exposure{tcpExposure("direct", 6379)})
+
+	require.NoError(t, err)
+	assert.Equal(t, []sealsv1.GatewaySelector{gatewaySel("kgateway-system", "kgateway")}, got)
+}
+
+func TestGatewaySelectors_HTTPExposureAddsNothing(t *testing.T) {
+	classes := []sealsv1.ExposureClass{*gatewayClass("http", sealsv1.ProtocolHTTP)}
+	web := sealsv1.Exposure{
+		Name:     "web",
+		Protocol: sealsv1.ProtocolHTTP,
+		Backend:  sealsv1.Backend{Service: "redis", Port: 8080},
+	}
+
+	got, err := gatewaySelectors(classes, []sealsv1.Exposure{web})
+
+	require.NoError(t, err)
+	assert.Empty(t, got, "HTTP is not served yet, so it must not open the policy")
+}
+
+func TestGatewaySelectors_ClassWithoutSelectorAddsNothing(t *testing.T) {
+	c := class("tcp", sealsv1.ProtocolTCP)
+
+	got, err := gatewaySelectors([]sealsv1.ExposureClass{c}, []sealsv1.Exposure{tcpExposure("direct", 6379)})
+
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+// A peer with neither selector is rejected by the API server, and the whole
+// policy with it.
+func TestGatewaySelectors_SelectorWithBothSidesNilIsSkipped(t *testing.T) {
+	c := class("tcp", sealsv1.ProtocolTCP)
+	c.Spec.GatewaySelector = &sealsv1.GatewaySelector{}
+
+	got, err := gatewaySelectors([]sealsv1.ExposureClass{c}, []sealsv1.Exposure{tcpExposure("direct", 6379)})
+
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestGatewaySelectors_MissingClassIsErrClassNotFound(t *testing.T) {
+	_, err := gatewaySelectors(nil, []sealsv1.Exposure{tcpExposureOn("deleted")})
+
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, errClassNotFound), "the caller must be able to keep the live policy")
+}
+
+// A class that exists but does not fit gets no route, so it needs no peer.
+// It is not a reason to stop the policy for everything else.
+func TestGatewaySelectors_WrongClassIsSkipped(t *testing.T) {
+	classes := []sealsv1.ExposureClass{
+		*gatewayClass("http", sealsv1.ProtocolHTTP),
+		*gatewayClass("tcp", sealsv1.ProtocolTCP),
+	}
+
+	got, err := gatewaySelectors(classes, []sealsv1.Exposure{
+		tcpExposureOn("http"),
+		tcpExposure("admin", 9121),
+	})
+
+	require.NoError(t, err)
+	assert.Len(t, got, 1)
+}
+
+func TestGatewaySelectors_NoExposures(t *testing.T) {
+	got, err := gatewaySelectors([]sealsv1.ExposureClass{*gatewayClass("tcp", sealsv1.ProtocolTCP)}, nil)
+
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestReconcile_ExposureOpensThePolicyToTheGateway(t *testing.T) {
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379)}
+	m, c := newManager(s, gatewayClass("tcp", sealsv1.ProtocolTCP))
+
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err)
+
+	assert.Equal(t,
+		[]netv1.NetworkPolicyPeer{expectedGatewayPeer("kgateway-system", "kgateway")},
+		ingressPeersOf(t, c),
+		"no allowedNamespaces and no claim annotation must still let the gateway in")
+}
+
+func TestReconcile_HTTPExposureWritesNoPolicy(t *testing.T) {
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{{
+		Name:     "web",
+		Protocol: sealsv1.ProtocolHTTP,
+		Backend:  sealsv1.Backend{Service: "redis", Port: 8080},
+	}}
+	m, c := newManager(s, gatewayClass("http", sealsv1.ProtocolHTTP))
+
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err)
+
+	err = c.Get(context.Background(), policyKey(), &netv1.NetworkPolicy{})
+	assert.True(t, apierrors.IsNotFound(err))
+}
+
+func TestReconcile_AllowAllNamespacesWithAnExposureIsOnePeer(t *testing.T) {
+	s := seal(1)
+	s.Spec.AllowAllNamespaces = ptr.To(true)
+	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379)}
+	m, c := newManager(s, gatewayClass("tcp", sealsv1.ProtocolTCP))
+
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err)
+
+	assert.Equal(t, []netv1.NetworkPolicyPeer{allNamespacesPeer}, ingressPeersOf(t, c))
+}
+
+// Deleting a class is an operator mistake. It must not cut the traffic of
+// every Seal that used it.
+func TestReconcile_MissingClassKeepsTheLivePolicy(t *testing.T) {
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379)}
+	live := &netv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: policyKey().Name, Namespace: policyKey().Namespace},
+		Spec: netv1.NetworkPolicySpec{
+			Ingress: []netv1.NetworkPolicyIngressRule{{
+				From: []netv1.NetworkPolicyPeer{expectedGatewayPeer("kgateway-system", "kgateway")},
+			}},
+		},
+	}
+	m, c := newManager(s, live)
+
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err)
+
+	assert.Equal(t,
+		[]netv1.NetworkPolicyPeer{expectedGatewayPeer("kgateway-system", "kgateway")},
+		ingressPeersOf(t, c),
+		"the gateway peer must survive its class being deleted")
+
+	got := &sealsv1.Seal{}
+	require.NoError(t, c.Get(context.Background(), sealKey(), got))
+	assert.Equal(t, sealsv1.SealPhaseFailed, got.Status.Phase)
+	assert.Contains(t, got.Status.Message, "tcp", "the message must name the missing class")
 }
