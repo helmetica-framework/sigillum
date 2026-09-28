@@ -11,6 +11,20 @@ import (
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 )
 
+// maxConflictMoves is how many times in a row one exposure is moved off a
+// conflicted port before sigillum stops trying.
+const maxConflictMoves = 3
+
+// conflictAction is what to do with one exposure's port after reading its
+// listener state.
+type conflictAction int
+
+const (
+	keepPort conflictAction = iota
+	movePort
+	giveUp
+)
+
 // takenPorts collects every listener port already claimed on shard.
 func takenPorts(sets []unstructured.Unstructured, shard gatewayapi.ShardRef, own *unstructured.Unstructured) map[int32]struct{} {
 	return takenPortsWithConflicts(sets, shard, own, nil)
@@ -102,4 +116,32 @@ func (r *SealManager) listAllListenerSets(ctx context.Context, live bool) ([]uns
 	}
 
 	return list.Items, nil
+}
+
+// stepConflict decides what to do with an exposure's port and returns its new
+// conflict count.
+//
+// A move breaks stickiness on purpose: a conflicted listener has no
+// traffic, so there is no address to keep stable.
+func stepConflict(count int32, state gatewayapi.ListenerState) (conflictAction, int32) {
+	switch state {
+	case gatewayapi.ListenerPending:
+		return keepPort, count
+	case gatewayapi.ListenerConflicted:
+		if count >= maxConflictMoves {
+			return giveUp, count
+		}
+
+		return movePort, count + 1
+	default:
+		return keepPort, 0
+	}
+}
+
+// conflictMessage is the exposure status message once sigillum gives up
+// moving a port.
+func conflictMessage(exposure string, port int32, shard gatewayapi.ShardRef) string {
+	return fmt.Sprintf(
+		"exposure %q: port %d on shard %s/%s still conflicts after %d moves, sigillum stopped moving it: ask the platform operator to check the shard's listeners",
+		exposure, port, shard.Namespace, shard.Name, maxConflictMoves)
 }

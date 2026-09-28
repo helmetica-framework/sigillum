@@ -404,3 +404,105 @@ func TestBuildListenerSet_EverythingItWritesIsReadable(t *testing.T) {
 	assert.Equal(t, parent, got)
 	assert.Equal(t, in, Listeners(obj))
 }
+
+// listenerSetWithStatus builds a ListenerSet at generation, carrying the given
+// conditions per listener name.
+func listenerSetWithStatus(t *testing.T, generation int64, conds map[string][]any) *unstructured.Unstructured {
+	t.Helper()
+
+	obj := New(ListenerSetGVK)
+	obj.SetName("networkconfig")
+	obj.SetNamespace("redis-7f3")
+	obj.SetGeneration(generation)
+
+	listeners := make([]any, 0, len(conds))
+	for name, cs := range conds {
+		listeners = append(listeners, map[string]any{"name": name, "conditions": cs})
+	}
+	require.NoError(t, unstructured.SetNestedSlice(obj.Object, listeners, "status", "listeners"))
+
+	return obj
+}
+
+func TestListenerStates_ReportsAConflictedListener(t *testing.T) {
+	obj := listenerSetWithStatus(t, 2, map[string][]any{
+		"direct": {condition("Conflicted", "True", 2), condition("Accepted", "False", 2)},
+	})
+
+	assert.Equal(t, ListenerConflicted, ListenerStates(obj)["direct"])
+}
+
+func TestListenerStates_ConflictedFalseIsOK(t *testing.T) {
+	obj := listenerSetWithStatus(t, 2, map[string][]any{
+		"direct": {condition("Conflicted", "False", 2), condition("Accepted", "True", 2)},
+	})
+
+	assert.Equal(t, ListenerOK, ListenerStates(obj)["direct"])
+}
+
+// Some gateway controllers leave Conflicted out when there is no conflict.
+func TestListenerStates_AcceptedWithoutConflictedIsOK(t *testing.T) {
+	obj := listenerSetWithStatus(t, 2, map[string][]any{
+		"direct": {condition("Accepted", "True", 2)},
+	})
+
+	assert.Equal(t, ListenerOK, ListenerStates(obj)["direct"])
+}
+
+// The case that would loop: sigillum moved the listener, which bumped the
+// generation, and the old conflict is still in the status.
+func TestListenerStates_StaleConflictIsPending(t *testing.T) {
+	obj := listenerSetWithStatus(t, 3, map[string][]any{
+		"direct": {condition("Conflicted", "True", 2)},
+	})
+
+	assert.Equal(t, ListenerPending, ListenerStates(obj)["direct"],
+		"a conflict on the old port must not move the new one")
+}
+
+func TestListenerStates_NoConditionsIsPending(t *testing.T) {
+	obj := listenerSetWithStatus(t, 2, map[string][]any{"direct": {}})
+
+	assert.Equal(t, ListenerPending, ListenerStates(obj)["direct"])
+}
+
+func TestListenerStates_MissingListenerReadsAsPending(t *testing.T) {
+	obj := listenerSetWithStatus(t, 2, map[string][]any{
+		"direct": {condition("Accepted", "True", 2)},
+	})
+
+	assert.Equal(t, ListenerPending, ListenerStates(obj)["admin"],
+		"the zero value must mean pending, so a missing entry is safe")
+}
+
+func TestListenerStates_ReadsEveryListener(t *testing.T) {
+	obj := listenerSetWithStatus(t, 2, map[string][]any{
+		"direct": {condition("Conflicted", "True", 2)},
+		"admin":  {condition("Accepted", "True", 2)},
+	})
+
+	assert.Equal(t, map[string]ListenerState{
+		"direct": ListenerConflicted,
+		"admin":  ListenerOK,
+	}, ListenerStates(obj))
+}
+
+func TestListenerStates_MalformedEntriesAreSkipped(t *testing.T) {
+	obj := New(ListenerSetGVK)
+	obj.SetGeneration(2)
+	require.NoError(t, unstructured.SetNestedSlice(obj.Object, []any{
+		"not a map",
+		map[string]any{"conditions": []any{condition("Conflicted", "True", 2)}},
+		map[string]any{"name": "direct", "conditions": []any{condition("Conflicted", "True", 2)}},
+	}, "status", "listeners"))
+
+	assert.Equal(t, map[string]ListenerState{"direct": ListenerConflicted}, ListenerStates(obj))
+}
+
+func TestListenerStates_NoStatusIsEmpty(t *testing.T) {
+	assert.Empty(t, ListenerStates(New(ListenerSetGVK)))
+}
+
+func TestListenerStates_NilObjectIsEmpty(t *testing.T) {
+	assert.Empty(t, ListenerStates(nil))
+}

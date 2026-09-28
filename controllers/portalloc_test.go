@@ -309,3 +309,83 @@ func TestListAllListenerSets_LivePicksTheAPIReader(t *testing.T) {
 	require.Len(t, stale, 1)
 	assert.Equal(t, "stale", stale[0].GetName(), "a cached read must not pay for an uncached list")
 }
+
+func TestStepConflict_OKResetsTheCount(t *testing.T) {
+	action, count := stepConflict(2, gatewayapi.ListenerOK)
+
+	assert.Equal(t, keepPort, action)
+	assert.Zero(t, count, "conflicts only count while they come in a row")
+}
+
+// Pending is the gap between a move and the gateway controller's verdict on
+// the new port. Resetting there would stop the count from ever reaching the
+// limit.
+func TestStepConflict_PendingKeepsTheCount(t *testing.T) {
+	action, count := stepConflict(2, gatewayapi.ListenerPending)
+
+	assert.Equal(t, keepPort, action)
+	assert.EqualValues(t, 2, count)
+}
+
+func TestStepConflict_FirstConflictMovesThePort(t *testing.T) {
+	action, count := stepConflict(0, gatewayapi.ListenerConflicted)
+
+	assert.Equal(t, movePort, action)
+	assert.EqualValues(t, 1, count)
+}
+
+func TestStepConflict_LastAllowedConflictStillMoves(t *testing.T) {
+	action, count := stepConflict(maxConflictMoves-1, gatewayapi.ListenerConflicted)
+
+	assert.Equal(t, movePort, action)
+	assert.EqualValues(t, maxConflictMoves, count)
+}
+
+func TestStepConflict_OneMoreConflictGivesUp(t *testing.T) {
+	action, count := stepConflict(maxConflictMoves, gatewayapi.ListenerConflicted)
+
+	assert.Equal(t, giveUp, action)
+	assert.EqualValues(t, maxConflictMoves, count, "the count must not grow once sigillum stops moving")
+}
+
+// Someone freed the port by hand. The exposure must recover without a restart.
+func TestStepConflict_RecoversAfterGivingUp(t *testing.T) {
+	action, count := stepConflict(maxConflictMoves, gatewayapi.ListenerOK)
+
+	assert.Equal(t, keepPort, action)
+	assert.Zero(t, count)
+}
+
+// Every move is followed by a pending gap before the next conflict shows up.
+// The loop has to stop anyway.
+func TestStepConflict_StopsALoopWithPendingGaps(t *testing.T) {
+	var count int32
+	moves := 0
+
+	for i := range 20 {
+		var action conflictAction
+		action, count = stepConflict(count, gatewayapi.ListenerConflicted)
+
+		if action == giveUp {
+			assert.Equal(t, maxConflictMoves, moves, "gave up at step %d", i)
+			return
+		}
+		require.Equal(t, movePort, action)
+		moves++
+
+		action, count = stepConflict(count, gatewayapi.ListenerPending)
+		require.Equal(t, keepPort, action)
+	}
+
+	t.Fatal("a port that always conflicts was moved forever")
+}
+
+func TestConflictMessage_NamesTheExposurePortAndShard(t *testing.T) {
+	msg := conflictMessage("direct", 30007, shard("tcp-0"))
+
+	assert.Contains(t, msg, `"direct"`)
+	assert.Contains(t, msg, "30007")
+	assert.Contains(t, msg, "kgateway-system/tcp-0")
+	assert.Contains(t, msg, "platform operator",
+		"the seal's owner cannot fix a shard, so the message must say who can")
+}

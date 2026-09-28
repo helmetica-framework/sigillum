@@ -28,6 +28,19 @@ type Listener struct {
 	Port     int32
 }
 
+// ListenerState is what the gateway controller last said about one listener's
+// port.
+type ListenerState int
+
+const (
+	// ListenerPending means there is no verdict for the current spec yet. It
+	// is the zero value, so a listener missing from the status reads as
+	// pending.
+	ListenerPending ListenerState = iota
+	ListenerConflicted
+	ListenerOK
+)
+
 // BuildListenerSet renders the one ListenerSet a Seal owns, parented to a shard
 // Gateway.
 //
@@ -170,4 +183,53 @@ func Listeners(obj *unstructured.Unstructured) []Listener {
 	}
 
 	return allocated
+}
+
+// ListenerStates reads status.listeners off a ListenerSet, keyed by listener
+// name.
+//
+// Only conditions for the object's current generation count. Right after a
+// listener moves to a new port, the status still describes the old one, and
+// reading that as a fresh conflict would move it again.
+func ListenerStates(obj *unstructured.Unstructured) map[string]ListenerState {
+	state := map[string]ListenerState{}
+
+	if obj == nil {
+		return state
+	}
+
+	listeners, _, _ := unstructured.NestedSlice(obj.Object, "status", "listeners")
+	generation := obj.GetGeneration()
+
+	for _, raw := range listeners {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		name, _, _ := unstructured.NestedString(entry, "name")
+		if name == "" {
+			continue
+		}
+
+		conditions, _, _ := unstructured.NestedSlice(entry, "conditions")
+
+		if status, found := currentCondition(conditions, "Conflicted", generation); found {
+			if status == "True" {
+				state[name] = ListenerConflicted
+			} else {
+				state[name] = ListenerOK
+			}
+			continue
+		}
+
+		if status, found := currentCondition(conditions, "Accepted", generation); found && status == "True" {
+			state[name] = ListenerOK
+			continue
+		}
+
+		state[name] = ListenerPending
+	}
+
+	return state
 }
