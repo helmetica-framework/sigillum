@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math/rand/v2"
 	"slices"
 
 	"github.com/go-logr/logr"
@@ -44,14 +45,18 @@ type SealManager struct {
 	// cached list would hand the same port to the next Seal.
 	APIReader client.Reader
 
+	// Rand picks ports. Nil means a random seed on first use.
+	Rand *rand.Rand
+
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 	Log      logr.Logger
 }
 
 type phase struct {
-	Phase   sealsv1.SealPhase
-	Message string
+	Phase     sealsv1.SealPhase
+	Message   string
+	Exposures []sealsv1.ExposureStatus
 }
 
 // +kubebuilder:rbac:groups=seals.helmetica.io,resources=seals,verbs=get;list;watch;update;patch
@@ -81,31 +86,77 @@ func (r *SealManager) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Res
 		return ctrl.Result{}, nil
 	}
 
-	want, err := r.desiredPhase(ctx, seal)
-	if err != nil {
-		return ctrl.Result{}, err
+	want, rerr := r.desiredPhase(ctx, seal)
+	if err := r.writeStatus(ctx, seal, want); err != nil {
+		return ctrl.Result{}, errors.Join(rerr, err)
 	}
+	return ctrl.Result{}, rerr
+}
 
+func (r *SealManager) writeStatus(ctx context.Context, seal *sealsv1.Seal, want phase) error {
 	if seal.Status.Phase == want.Phase &&
 		seal.Status.ObservedGeneration == seal.Generation &&
-		seal.Status.Message == want.Message {
-		return ctrl.Result{}, nil
+		seal.Status.Message == want.Message &&
+		slices.Equal(seal.Status.Exposures, want.Exposures) {
+		return nil
 	}
 
 	if seal.Status.Phase != want.Phase {
+		log := r.Log.WithValues("seal", client.ObjectKeyFromObject(seal))
 		log.Info("seal phase changed", "from", seal.Status.Phase, "to", want.Phase)
 	}
 
-	status := sealsacv1.Seal(seal.GetName(), seal.GetNamespace()).
-		WithStatus(sealsacv1.SealStatus().
-			WithPhase(want.Phase).
-			WithObservedGeneration(seal.Generation).
-			WithMessage(want.Message))
+	st := sealsacv1.SealStatus().
+		WithPhase(want.Phase).
+		WithObservedGeneration(seal.Generation).
+		WithMessage(want.Message)
+
+	for _, e := range want.Exposures {
+		st.WithExposures(exposureStatusAC(e))
+	}
+
+	status := sealsacv1.Seal(seal.GetName(), seal.GetNamespace()).WithStatus(st)
 
 	if err := r.Status().Apply(ctx, status, fieldOwner, client.ForceOwnership); err != nil {
-		return ctrl.Result{}, fmt.Errorf("applying seal status: %w", err)
+		return fmt.Errorf("applying seal status: %w", err)
 	}
-	return ctrl.Result{}, nil
+
+	return nil
+}
+
+// exposureStatusAC sets only the fields that hold a value. Apply sends a set
+// zero as a real value, and a port of 0 fails the CRD's minimum of 1.
+func exposureStatusAC(e sealsv1.ExposureStatus) *sealsacv1.ExposureStatusApplyConfiguration {
+	ac := sealsacv1.ExposureStatus().
+		WithName(e.Name).
+		WithReady(e.Ready)
+
+	if e.Class != "" {
+		ac.WithClass(e.Class)
+	}
+	if e.Message != "" {
+		ac.WithMessage(e.Message)
+	}
+	if e.Hostname != "" {
+		ac.WithHostname(e.Hostname)
+	}
+	if e.Shard != "" {
+		ac.WithShard(e.Shard)
+	}
+	if e.Address != "" {
+		ac.WithAddress(e.Address)
+	}
+	if e.Port != 0 {
+		ac.WithPort(e.Port)
+	}
+	if e.URL != "" {
+		ac.WithURL(e.URL)
+	}
+	if e.ConflictCount != 0 {
+		ac.WithConflictCount(e.ConflictCount)
+	}
+
+	return ac
 }
 
 // desiredPhase is the seam where sigillum's real logic goes.
@@ -122,7 +173,11 @@ func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (pha
 		return phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}, errf
 	}
 
-	var selectors []sealsv1.GatewaySelector
+	var (
+		selectors []sealsv1.GatewaySelector
+		outcomes  []exposureOutcome
+		xerr      error
+	)
 	if len(seal.Spec.Expose) > 0 {
 		classes := &sealsv1.ExposureClassList{}
 		if err := r.List(ctx, classes); err != nil {
@@ -130,26 +185,41 @@ func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (pha
 			return phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}, errf
 		}
 
+		outcomes, xerr = r.reconcileExposures(ctx, seal, classes.Items)
+
 		selectors, err = gatewaySelectors(classes.Items, seal.Spec.Expose)
 		if errors.Is(err, errClassNotFound) {
 			// Leave the live policy alone: rewriting it without this class's
 			// peer would cut the gateway off because of an operator mistake.
-			return phase{Phase: sealsv1.SealPhaseFailed, Message: err.Error()}, nil
+			return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseFailed, Message: err.Error()}), xerr
 		}
 		if err != nil {
-			return phase{Phase: sealsv1.SealPhaseFailed, Message: err.Error()}, err
+			return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseFailed, Message: err.Error()}),
+				errors.Join(xerr, err)
+		}
+	} else if len(seal.Status.Exposures) > 0 {
+		// The last exposure was removed: its listener and routes have to go.
+		if _, err := r.reconcileExposures(ctx, seal, nil); err != nil {
+			// Keep the old exposures in status, or the next pass skips the
+			// cleanup.
+			return phase{
+				Phase:     sealsv1.SealPhaseFailed,
+				Message:   err.Error(),
+				Exposures: seal.Status.Exposures,
+			}, err
 		}
 	}
 
 	peers, provision := ingressPeers(seal, instanceNS, selectors)
 	if !provision {
-		return phase{Phase: sealsv1.SealPhaseReady, Message: "empty config, skipping provisioning"}, nil
+		return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseReady, Message: "empty config, skipping provisioning"}), xerr
 	}
 
 	owner, err := controllerRef(seal, r.Scheme)
 	if err != nil {
 		errf := fmt.Errorf("building owner reference: %w", err)
-		return phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}, errf
+		return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}),
+			errors.Join(xerr, errf)
 	}
 
 	np := netv1ac.NetworkPolicy(policyName, seal.GetNamespace()).
@@ -163,10 +233,11 @@ func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (pha
 
 	if err := r.Apply(ctx, np, fieldOwner, client.ForceOwnership); err != nil {
 		errf := fmt.Errorf("reconciling network policy: %w", err)
-		return phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}, errf
+		return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}),
+			errors.Join(xerr, errf)
 	}
 
-	return phase{Phase: sealsv1.SealPhaseReady, Message: "networkpolicy applied"}, nil
+	return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseReady, Message: "networkpolicy applied"}), xerr
 }
 
 // controllerRef builds the seal's controller owner reference.

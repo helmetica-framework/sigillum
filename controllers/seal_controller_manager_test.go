@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -12,6 +13,7 @@ import (
 	netv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/managedfields"
@@ -725,7 +727,8 @@ func TestGatewaySelectors_NoExposures(t *testing.T) {
 func TestReconcile_ExposureOpensThePolicyToTheGateway(t *testing.T) {
 	s := seal(1)
 	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379)}
-	m, c := newManager(s, gatewayClass("tcp", sealsv1.ProtocolTCP))
+	shard := tcpShard("tcp-0")
+	m, c := newManager(s, exposableTCPClass(), &shard)
 
 	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
 	require.NoError(t, err)
@@ -756,7 +759,8 @@ func TestReconcile_AllowAllNamespacesWithAnExposureIsOnePeer(t *testing.T) {
 	s := seal(1)
 	s.Spec.AllowAllNamespaces = ptr.To(true)
 	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379)}
-	m, c := newManager(s, gatewayClass("tcp", sealsv1.ProtocolTCP))
+	shard := tcpShard("tcp-0")
+	m, c := newManager(s, exposableTCPClass(), &shard)
 
 	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
 	require.NoError(t, err)
@@ -791,4 +795,415 @@ func TestReconcile_MissingClassKeepsTheLivePolicy(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), sealKey(), got))
 	assert.Equal(t, sealsv1.SealPhaseFailed, got.Status.Phase)
 	assert.Contains(t, got.Status.Message, "tcp", "the message must name the missing class")
+}
+
+// exposableTCPClass is tcpClass with gateway pods in kgateway-system, so a
+// Seal using it gets a NetworkPolicy with the gateway peer.
+func exposableTCPClass() *sealsv1.ExposureClass {
+	c := tcpClass(0)
+	sel := gatewaySel("kgateway-system", "kgateway")
+	c.Spec.GatewaySelector = &sel
+
+	return c
+}
+
+// tcpShardWithAddress is tcpShard after the gateway controller gave it addr.
+func tcpShardWithAddress(t *testing.T, name, addr string) *unstructured.Unstructured {
+	t.Helper()
+
+	obj := tcpShard(name)
+	require.NoError(t, unstructured.SetNestedSlice(obj.Object, []any{
+		map[string]any{"type": "IPAddress", "value": addr},
+	}, "status", "addresses"))
+
+	return &obj
+}
+
+// statusCondition is one current condition as the gateway controller writes
+// it. No observedGeneration means it counts for any generation.
+func statusCondition(condType, status string) map[string]any {
+	return map[string]any{"type": condType, "status": status, "message": condType + " is " + status}
+}
+
+// readyRoute is the Seal's TCPRoute for exposure, already accepted and
+// resolved by the gateway controller.
+func readyRoute(t *testing.T, exposure string) *unstructured.Unstructured {
+	t.Helper()
+
+	obj := tcpRoute("sample-"+exposure, "default", sealUID)
+	require.NoError(t, unstructured.SetNestedSlice(obj.Object, []any{
+		map[string]any{
+			"conditions": []any{
+				statusCondition("Accepted", "True"),
+				statusCondition("ResolvedRefs", "True"),
+			},
+		},
+	}, "status", "parents"))
+
+	return &obj
+}
+
+// ownListenerSet is the Seal's ListenerSet on tcp-0 with one listener,
+// "direct", on port. conds is the gateway controller's verdict on it.
+func ownListenerSet(t *testing.T, port int64, conds ...any) *unstructured.Unstructured {
+	t.Helper()
+
+	obj := listenerSet(t, "sample", "default", "tcp-0", port)
+	obj.SetOwnerReferences([]metav1.OwnerReference{{
+		APIVersion:         sealsv1.GroupVersion.String(),
+		Kind:               "Seal",
+		Name:               "sample",
+		UID:                sealUID,
+		Controller:         ptr.To(true),
+		BlockOwnerDeletion: ptr.To(true),
+	}})
+
+	listeners, _, err := unstructured.NestedSlice(obj.Object, "spec", "listeners")
+	require.NoError(t, err)
+	listeners[0].(map[string]any)["name"] = "direct"
+	require.NoError(t, unstructured.SetNestedSlice(obj.Object, listeners, "spec", "listeners"))
+
+	if len(conds) > 0 {
+		require.NoError(t, unstructured.SetNestedSlice(obj.Object, []any{
+			map[string]any{"name": "direct", "conditions": conds},
+		}, "status", "listeners"))
+	}
+
+	return &obj
+}
+
+// ownListenerPort reads the port of the "direct" listener on the Seal's
+// ListenerSet.
+func ownListenerPort(t *testing.T, c client.Client) int32 {
+	t.Helper()
+
+	ls, found := readListenerSet(t, c, seal(1))
+	require.True(t, found, "the seal must have a listenerset")
+
+	for _, l := range gatewayapi.Listeners(ls) {
+		if l.Name == "direct" {
+			return l.Port
+		}
+	}
+
+	require.Fail(t, "no listener named direct")
+
+	return 0
+}
+
+func readSeal(t *testing.T, c client.Client) *sealsv1.Seal {
+	t.Helper()
+
+	got := &sealsv1.Seal{}
+	require.NoError(t, c.Get(context.Background(), sealKey(), got))
+
+	return got
+}
+
+// settledSeal is a Seal with one TCP exposure, "direct", whose status already
+// reports port 30007 and conflictCount.
+func settledSeal(conflictCount int32) *sealsv1.Seal {
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379)}
+	s.Status.Exposures = []sealsv1.ExposureStatus{{
+		Name: "direct", Class: "tcp", Shard: "tcp-0", Port: 30007, ConflictCount: conflictCount,
+	}}
+
+	return s
+}
+
+func TestReconcile_ShardExhaustionWritesTheFailedPhase(t *testing.T) {
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379)}
+	shard := tcpShard("tcp-0")
+	full := listenerSet(t, "other", "other-ns", "tcp-0", 30000)
+	m, c := newManager(s, tcpClass(1), &shard, &full)
+
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	require.Error(t, err, "exhaustion is a real error and must be returned")
+
+	got := readSeal(t, c)
+	assert.Equal(t, sealsv1.SealPhaseFailed, got.Status.Phase,
+		"the failed phase must be written, not swallowed by the error return")
+	assert.Contains(t, got.Status.Message, "direct")
+	require.Len(t, got.Status.Exposures, 1)
+	assert.False(t, got.Status.Exposures[0].Ready)
+}
+
+func TestReconcile_ReadyTCPExposureIsReported(t *testing.T) {
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379)}
+	m, c := newManager(s, tcpClass(0), tcpShardWithAddress(t, "tcp-0", "172.19.0.200"), readyRoute(t, "direct"))
+
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err)
+
+	got := readSeal(t, c)
+	assert.Equal(t, sealsv1.SealPhaseReady, got.Status.Phase)
+	require.Len(t, got.Status.Exposures, 1)
+
+	port := ownListenerPort(t, c)
+	e := got.Status.Exposures[0]
+	assert.True(t, e.Ready, e.Message)
+	assert.Equal(t, "direct", e.Name)
+	assert.Equal(t, "tcp", e.Class)
+	assert.Equal(t, "tcp-0", e.Shard)
+	assert.Equal(t, "172.19.0.200", e.Address)
+	assert.Equal(t, port, e.Port, "status must report the port on the listener")
+	assert.Equal(t, fmt.Sprintf("tcp://172.19.0.200:%d", port), e.URL)
+}
+
+func TestReconcile_WaitingForTheGatewayAddressIsPending(t *testing.T) {
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379)}
+	shard := tcpShard("tcp-0")
+	m, c := newManager(s, tcpClass(0), &shard, readyRoute(t, "direct"))
+
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err, "waiting on the gateway controller is not an error")
+
+	got := readSeal(t, c)
+	assert.Equal(t, sealsv1.SealPhasePending, got.Status.Phase)
+	require.Len(t, got.Status.Exposures, 1)
+	assert.False(t, got.Status.Exposures[0].Ready)
+	assert.Equal(t, "waiting for gateway address", got.Status.Exposures[0].Message)
+}
+
+func TestReconcile_HTTPExposureIsNotSupportedYet(t *testing.T) {
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{{
+		Name:     "web",
+		Protocol: sealsv1.ProtocolHTTP,
+		Backend:  sealsv1.Backend{Service: "redis", Port: 8080},
+	}}
+	m, c := newManager(s, gatewayClass("http", sealsv1.ProtocolHTTP))
+
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err, "a retry cannot fix this, so it is not an error")
+
+	got := readSeal(t, c)
+	assert.Equal(t, sealsv1.SealPhaseFailed, got.Status.Phase)
+	require.Len(t, got.Status.Exposures, 1)
+	assert.False(t, got.Status.Exposures[0].Ready)
+	assert.Equal(t, "protocol HTTP is not supported yet", got.Status.Exposures[0].Message)
+}
+
+func TestReconcile_ExposureStatusFollowsSpecOrder(t *testing.T) {
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("zeta", 1), tcpExposure("alpha", 2)}
+	shard := tcpShard("tcp-0")
+	m, c := newManager(s, tcpClass(0), &shard)
+
+	_, _ = m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+
+	got := readSeal(t, c)
+	require.Len(t, got.Status.Exposures, 2)
+	assert.Equal(t, "zeta", got.Status.Exposures[0].Name, "status order must follow spec order")
+	assert.Equal(t, "alpha", got.Status.Exposures[1].Name)
+}
+
+func TestReconcile_ExposedSealIsStillIdempotent(t *testing.T) {
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379)}
+	m, c := newManager(s, tcpClass(0), tcpShardWithAddress(t, "tcp-0", "172.19.0.200"), readyRoute(t, "direct"))
+	ctx := context.Background()
+
+	_, err := m.Reconcile(ctx, ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err)
+	first := readSeal(t, c)
+	firstPort := ownListenerPort(t, c)
+
+	_, err = m.Reconcile(ctx, ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err)
+	second := readSeal(t, c)
+
+	assert.Equal(t, first.ResourceVersion, second.ResourceVersion,
+		"a settled seal with exposures must not be written again")
+	assert.Equal(t, firstPort, ownListenerPort(t, c), "a settled exposure keeps its port")
+}
+
+func TestReconcile_UnresolvedExposureStillAppearsInStatus(t *testing.T) {
+	s := seal(1)
+	e := tcpExposure("direct", 6379)
+	e.ExposureClass = "does-not-exist"
+	s.Spec.Expose = []sealsv1.Exposure{e}
+	m, c := newManager(s)
+
+	_, _ = m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+
+	got := readSeal(t, c)
+	require.Len(t, got.Status.Exposures, 1,
+		"an empty exposures list reads as 'nothing was requested', which is the opposite of the truth")
+	assert.False(t, got.Status.Exposures[0].Ready)
+	assert.Contains(t, got.Status.Exposures[0].Message, "does-not-exist")
+}
+
+func TestReconcile_DeletedClassKeepsTheChildObjects(t *testing.T) {
+	s := settledSeal(0)
+	shard := tcpShard("tcp-0")
+
+	// No ExposureClass in the object set. It was deleted.
+	m, c := newManager(s, &shard, ownListenerSet(t, 30007), readyRoute(t, "direct"))
+
+	_, _ = m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+
+	assert.EqualValues(t, 30007, ownListenerPort(t, c),
+		"deleting a cluster-scoped class must not take down every instance that used it")
+	_, found := readTCPRoute(t, c, "sample-direct", "default")
+	assert.True(t, found, "the route must stay too")
+
+	got := readSeal(t, c)
+	require.Len(t, got.Status.Exposures, 1)
+	assert.False(t, got.Status.Exposures[0].Ready)
+	assert.Equal(t, `exposure class "tcp" no longer exists`, got.Status.Exposures[0].Message)
+}
+
+func TestReconcile_NoExposuresLeavesTheListNil(t *testing.T) {
+	m, c := newManager(seal(1))
+
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err)
+
+	assert.Nil(t, readSeal(t, c).Status.Exposures)
+}
+
+func TestReconcile_ConflictMovesThePort(t *testing.T) {
+	shard := tcpShard("tcp-0")
+	m, c := newManager(settledSeal(0), tcpClass(0), &shard,
+		ownListenerSet(t, 30007, statusCondition("Conflicted", "True")))
+
+	_, _ = m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+
+	port := ownListenerPort(t, c)
+	assert.NotEqualValues(t, 30007, port, "a conflicted port must be moved")
+
+	got := readSeal(t, c)
+	require.Len(t, got.Status.Exposures, 1)
+	assert.EqualValues(t, 1, got.Status.Exposures[0].ConflictCount)
+	assert.Equal(t, port, got.Status.Exposures[0].Port)
+}
+
+func TestReconcile_ConflictGivesUpAfterTheLimit(t *testing.T) {
+	shard := tcpShard("tcp-0")
+	m, c := newManager(settledSeal(maxConflictMoves), tcpClass(0), &shard,
+		ownListenerSet(t, 30007, statusCondition("Conflicted", "True")))
+
+	_, _ = m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+
+	assert.EqualValues(t, 30007, ownListenerPort(t, c), "after giving up the port stays where it is")
+
+	got := readSeal(t, c)
+	assert.Equal(t, sealsv1.SealPhaseFailed, got.Status.Phase)
+	require.Len(t, got.Status.Exposures, 1)
+	assert.False(t, got.Status.Exposures[0].Ready)
+	assert.Equal(t, conflictMessage("direct", 30007, tcpRef("tcp-0")), got.Status.Exposures[0].Message)
+	assert.EqualValues(t, maxConflictMoves, got.Status.Exposures[0].ConflictCount)
+}
+
+func TestReconcile_PendingListenerKeepsThePortAndTheCount(t *testing.T) {
+	shard := tcpShard("tcp-0")
+	m, c := newManager(settledSeal(2), tcpClass(0), &shard, ownListenerSet(t, 30007))
+
+	_, _ = m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+
+	assert.EqualValues(t, 30007, ownListenerPort(t, c))
+
+	got := readSeal(t, c)
+	require.Len(t, got.Status.Exposures, 1)
+	assert.EqualValues(t, 2, got.Status.Exposures[0].ConflictCount,
+		"no verdict yet is not a reason to forget past conflicts")
+}
+
+func TestReconcile_RemovingTheLastExposureCleansUp(t *testing.T) {
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379)}
+	m, c := newManager(s, tcpClass(0), tcpShardWithAddress(t, "tcp-0", "172.19.0.200"), readyRoute(t, "direct"))
+	ctx := context.Background()
+
+	// The first pass makes sigillum the owner of status.exposures, as it is
+	// on a real cluster.
+	_, err := m.Reconcile(ctx, ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err)
+	require.Len(t, readSeal(t, c).Status.Exposures, 1)
+
+	removed := readSeal(t, c)
+	removed.Spec.Expose = nil
+	require.NoError(t, c.Update(ctx, removed))
+
+	_, err = m.Reconcile(ctx, ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err)
+
+	ls := gatewayapi.New(gatewayapi.ListenerSetGVK)
+	err = c.Get(ctx, sealKey(), ls)
+	assert.True(t, apierrors.IsNotFound(err), "the listenerset must go, or its ports stay taken")
+
+	_, found := readTCPRoute(t, c, "sample-direct", "default")
+	assert.False(t, found)
+
+	assert.Nil(t, readSeal(t, c).Status.Exposures)
+}
+
+func TestReconcile_StaleCacheKeepsThePort(t *testing.T) {
+	shard := tcpShard("tcp-0")
+	m, c := newManager(settledSeal(0), tcpClass(0), &shard)
+	m.APIReader = fake.NewClientBuilder().
+		WithScheme(newTestScheme()).
+		WithObjects(ownListenerSet(t, 30007)).
+		Build()
+
+	_, _ = m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+
+	assert.EqualValues(t, 30007, ownListenerPort(t, c),
+		"the cache had not seen the listenerset yet, the live list had")
+}
+
+func TestReconcile_SiblingsNeverShareAPort(t *testing.T) {
+	s := settledSeal(0)
+	s.Spec.Expose = append(s.Spec.Expose, tcpExposure("second", 6380))
+	cls := tcpClass(0)
+	cls.Spec.PortRange = &sealsv1.PortRange{From: 30007, To: 30007}
+	shard := tcpShard("tcp-0")
+	m, c := newManager(s, cls, &shard, ownListenerSet(t, 30007))
+
+	_, _ = m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+
+	ls := gatewayapi.New(gatewayapi.ListenerSetGVK)
+	require.NoError(t, c.Get(context.Background(), sealKey(), ls))
+	listeners := gatewayapi.Listeners(ls)
+	require.Len(t, listeners, 1, "second must not get a port that direct already uses")
+	assert.EqualValues(t, 30007, listeners[0].Port)
+
+	got := readSeal(t, c)
+	require.Len(t, got.Status.Exposures, 2)
+	assert.Contains(t, got.Status.Exposures[1].Message, "no free port")
+}
+
+type failingReader struct{ client.Reader }
+
+func (failingReader) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
+	return errors.New("api server unavailable")
+}
+
+func TestReconcile_ShortErrorKeepsTheLastStatus(t *testing.T) {
+	shard := tcpShard("tcp-0")
+	m, c := newManager(settledSeal(0), tcpClass(0), &shard,
+		ownListenerSet(t, 30007, statusCondition("Conflicted", "True")))
+	ctx := context.Background()
+
+	// The first pass moves the port, so sigillum owns a status with a port and
+	// a conflict count of 1, as it would on a real cluster.
+	_, _ = m.Reconcile(ctx, ctrl.Request{NamespacedName: sealKey()})
+	before := readSeal(t, c)
+	require.Len(t, before.Status.Exposures, 1)
+	require.EqualValues(t, 1, before.Status.Exposures[0].ConflictCount)
+
+	m.APIReader = failingReader{}
+	_, err := m.Reconcile(ctx, ctrl.Request{NamespacedName: sealKey()})
+	require.Error(t, err)
+
+	got := readSeal(t, c)
+	require.Len(t, got.Status.Exposures, 1)
+	assert.EqualValues(t, 1, got.Status.Exposures[0].ConflictCount,
+		"a reset count lets the move limit be bypassed")
+	assert.Equal(t, before.Status.Exposures[0].Port, got.Status.Exposures[0].Port)
 }

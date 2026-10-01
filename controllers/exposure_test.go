@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"testing"
 
@@ -497,4 +498,153 @@ func TestReconcileTCPRoutes_ReapplyingTheSameExposuresIsStable(t *testing.T) {
 	require.NoError(t, m.reconcileTCPRoutes(ctx, s, want))
 
 	assert.Equal(t, []string{"sample-direct"}, routeNames(t, c, "default"))
+}
+
+func TestBuildExposureStatus_ReadyTCPExposure(t *testing.T) {
+	got := buildExposureStatus(
+		sealsv1.Exposure{Name: "direct", Protocol: sealsv1.ProtocolTCP},
+		"tcp", exposureResult{Shard: "tcp-0", Address: "172.19.0.200", Port: 30007, RouteReady: true},
+	)
+
+	assert.Equal(t, "direct", got.Name)
+	assert.Equal(t, "tcp", got.Class)
+	assert.True(t, got.Ready)
+	assert.Equal(t, "tcp-0", got.Shard)
+	assert.Equal(t, "172.19.0.200", got.Address)
+	assert.EqualValues(t, 30007, got.Port)
+	assert.Equal(t, "tcp://172.19.0.200:30007", got.URL)
+}
+
+func TestBuildExposureStatus_HTTPIsNotSupportedYet(t *testing.T) {
+	got := buildExposureStatus(
+		sealsv1.Exposure{Name: "api", Protocol: sealsv1.ProtocolHTTPS},
+		"public", exposureResult{},
+	)
+
+	assert.False(t, got.Ready)
+	assert.Equal(t, "protocol HTTPS is not supported yet", got.Message)
+	assert.Empty(t, got.URL)
+}
+
+func TestBuildExposureStatus_NoGatewayAddressYet(t *testing.T) {
+	got := buildExposureStatus(
+		sealsv1.Exposure{Name: "direct", Protocol: sealsv1.ProtocolTCP},
+		"tcp", exposureResult{Shard: "tcp-0", Port: 30007, RouteReady: true},
+	)
+
+	assert.False(t, got.Ready)
+	assert.Empty(t, got.URL, "tcp://:30007 is worse than no URL")
+	assert.Equal(t, "waiting for gateway address", got.Message)
+	assert.Equal(t, "tcp-0", got.Shard, "the shard is known before its address")
+	assert.EqualValues(t, 30007, got.Port)
+}
+
+func TestBuildExposureStatus_RouteNotReadyCarriesTheRouteMessage(t *testing.T) {
+	got := buildExposureStatus(
+		sealsv1.Exposure{Name: "direct", Protocol: sealsv1.ProtocolTCP},
+		"tcp", exposureResult{
+			Shard: "tcp-0", Address: "172.19.0.200", Port: 30007,
+			RouteMsg: "service redis not found",
+		},
+	)
+
+	assert.False(t, got.Ready)
+	assert.Equal(t, "service redis not found", got.Message, "the route's own message, not a made-up one")
+}
+
+func TestBuildExposureStatus_CarriesTheFailureMessage(t *testing.T) {
+	got := buildExposureStatus(
+		sealsv1.Exposure{Name: "direct", Protocol: sealsv1.ProtocolTCP},
+		"", exposureResult{Err: errors.New("no shard in class tcp has capacity")},
+	)
+
+	assert.False(t, got.Ready)
+	assert.Contains(t, got.Message, "no shard in class tcp has capacity")
+}
+
+func TestBuildExposureStatus_FailureWinsOverAReadyRoute(t *testing.T) {
+	got := buildExposureStatus(
+		sealsv1.Exposure{Name: "direct", Protocol: sealsv1.ProtocolTCP},
+		"tcp", exposureResult{
+			Shard: "tcp-0", Address: "172.19.0.200", Port: 30007, RouteReady: true,
+			Err: errors.New("port 30007 still conflicts"),
+		},
+	)
+
+	assert.False(t, got.Ready)
+	assert.Equal(t, "port 30007 still conflicts", got.Message)
+}
+
+func TestBuildExposureStatus_CarriesTheConflictCount(t *testing.T) {
+	got := buildExposureStatus(
+		sealsv1.Exposure{Name: "direct", Protocol: sealsv1.ProtocolTCP},
+		"tcp", exposureResult{Shard: "tcp-0", Port: 30007, ConflictCount: 2},
+	)
+
+	assert.EqualValues(t, 2, got.ConflictCount, "the count must survive to the next reconcile")
+}
+
+func readyOutcome(name string) exposureOutcome {
+	return exposureOutcome{Status: sealsv1.ExposureStatus{Name: name, Ready: true}}
+}
+
+func TestRollUp_NoExposuresKeepsDoneAndANilList(t *testing.T) {
+	done := phase{Phase: sealsv1.SealPhaseReady, Message: "networkpolicy applied"}
+
+	got := rollUp(nil, done)
+
+	assert.Equal(t, done, got)
+	assert.Nil(t, got.Exposures)
+}
+
+func TestRollUp_AllReadyIsDone(t *testing.T) {
+	got := rollUp(
+		[]exposureOutcome{readyOutcome("a"), readyOutcome("b")},
+		phase{Phase: sealsv1.SealPhaseReady, Message: "networkpolicy applied"},
+	)
+
+	assert.Equal(t, sealsv1.SealPhaseReady, got.Phase)
+	assert.Equal(t, "networkpolicy applied", got.Message)
+	require.Len(t, got.Exposures, 2)
+	assert.Equal(t, "a", got.Exposures[0].Name)
+	assert.Equal(t, "b", got.Exposures[1].Name)
+}
+
+func TestRollUp_WaitingIsPending(t *testing.T) {
+	waiting := exposureOutcome{Status: sealsv1.ExposureStatus{Name: "b", Message: "waiting for gateway address"}}
+
+	got := rollUp(
+		[]exposureOutcome{readyOutcome("a"), waiting},
+		phase{Phase: sealsv1.SealPhaseReady},
+	)
+
+	assert.Equal(t, sealsv1.SealPhasePending, got.Phase)
+	assert.Equal(t, `exposure "b": waiting for gateway address`, got.Message)
+}
+
+func TestRollUp_FailedBeatsWaitingAndNamesTheFirstFailure(t *testing.T) {
+	waiting := exposureOutcome{Status: sealsv1.ExposureStatus{Name: "a", Message: "waiting for gateway address"}}
+	first := exposureOutcome{Status: sealsv1.ExposureStatus{Name: "b", Message: "no shard has room"}, Failed: true}
+	second := exposureOutcome{Status: sealsv1.ExposureStatus{Name: "c", Message: "other"}, Failed: true}
+
+	got := rollUp(
+		[]exposureOutcome{waiting, first, second},
+		phase{Phase: sealsv1.SealPhaseReady},
+	)
+
+	assert.Equal(t, sealsv1.SealPhaseFailed, got.Phase)
+	assert.Equal(t, `exposure "b": no shard has room`, got.Message)
+}
+
+func TestRollUp_WaitingDoesNotHideAFailedPolicy(t *testing.T) {
+	waiting := exposureOutcome{Status: sealsv1.ExposureStatus{Name: "a", Message: "waiting for gateway address"}}
+
+	got := rollUp(
+		[]exposureOutcome{waiting},
+		phase{Phase: sealsv1.SealPhaseFailed, Message: "reconciling network policy: boom"},
+	)
+
+	assert.Equal(t, sealsv1.SealPhaseFailed, got.Phase)
+	assert.Equal(t, "reconciling network policy: boom", got.Message)
+	require.Len(t, got.Exposures, 1)
 }

@@ -69,6 +69,14 @@ func takenPortsWithConflicts(
 	return taken
 }
 
+func (r *SealManager) random() *rand.Rand {
+	if r.Rand == nil {
+		r.Rand = rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
+	}
+
+	return r.Rand
+}
+
 // allocatePort picks a port in rng that is not in taken.
 //
 // The choice is random rather than lowest-first so a just-released port is

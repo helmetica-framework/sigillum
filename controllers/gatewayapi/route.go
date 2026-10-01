@@ -43,7 +43,7 @@ func BuildTCPRoute(
 	}
 
 	route := New(TCPRouteGVK)
-	route.SetName(routeName(sealName, exposureName))
+	route.SetName(RouteName(sealName, exposureName))
 	route.SetNamespace(namespace)
 	route.SetOwnerReferences([]metav1.OwnerReference{owner})
 
@@ -71,12 +71,12 @@ func BuildTCPRoute(
 	return route, nil
 }
 
-// routeName is the name of the TCPRoute for one exposure.
+// RouteName is the name of the TCPRoute for one exposure.
 //
 // Seal and exposure names are each valid on their own but can exceed the object
 // name limit once joined, so a long result is truncated and given a hash suffix
 // to keep it unique.
-func routeName(sealName, exposureName string) string {
+func RouteName(sealName, exposureName string) string {
 	name := sealName + "-" + exposureName
 	if len(name) <= maxNameLength {
 		return name
@@ -87,4 +87,55 @@ func routeName(sealName, exposureName string) string {
 	prefix := strings.TrimRight(name[:maxNameLength-hashLength-1], "-.")
 
 	return prefix + "-" + suffix
+}
+
+// RouteIsReady reports whether the gateway controller both accepted the route
+// and resolved its backend. When not, it returns the route's own condition
+// message, so the user sees what the gateway controller said.
+func RouteIsReady(obj *unstructured.Unstructured) (bool, string) {
+	const notSeen = "waiting for the gateway controller to accept the route"
+
+	if obj == nil {
+		return false, notSeen
+	}
+
+	parents, _, _ := unstructured.NestedSlice(obj.Object, "status", "parents")
+
+	msg := ""
+	for _, rawp := range parents {
+		p, ok := rawp.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		conds, _, _ := unstructured.NestedSlice(p, "conditions")
+
+		ready := true
+		for _, condType := range []string{"Accepted", "ResolvedRefs"} {
+			c, found := findCurrentCondition(conds, condType, obj.GetGeneration())
+			if !found {
+				ready = false
+				continue
+			}
+
+			status, _, _ := unstructured.NestedString(c, "status")
+			if status == "True" {
+				continue
+			}
+
+			ready = false
+			if msg == "" {
+				msg, _, _ = unstructured.NestedString(c, "message")
+			}
+		}
+
+		if ready {
+			return true, ""
+		}
+	}
+
+	if msg == "" {
+		msg = notSeen
+	}
+	return false, msg
 }
