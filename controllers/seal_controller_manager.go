@@ -22,9 +22,12 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
 	sealsacv1 "github.com/helmetica-framework/sigillum/applyconfiguration/api/v1"
+	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 )
 
 const (
@@ -64,6 +67,10 @@ type phase struct {
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
+// +kubebuilder:rbac:groups=seals.helmetica.io,resources=exposureclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=listenersets;tcproutes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=listenersets/status;tcproutes/status,verbs=get
 
 // Reconcile drives a Seal's status to reflect desiredPhase. There is nothing
 // else to do yet: the placeholder owns no other cluster objects, so this is
@@ -409,12 +416,29 @@ func labelSelectorAC(sel *metav1.LabelSelector) *metav1ac.LabelSelectorApplyConf
 	return ac
 }
 
-// SetupWithManager wires the controller: watch Seal. Nothing else is owned
-// yet, so there are no additional watches.
-func (r *SealManager) SetupWithManager(name string, mgr ctrl.Manager) error {
+// sealControllerOptions sets one worker, on purpose. Port allocation reads the
+// live ListenerSet list and then writes. Two workers interleave those two
+// steps and hand out the same port.
+func sealControllerOptions() controller.Options {
+	return controller.Options{MaxConcurrentReconciles: 1}
+}
+
+// SetupWithManager wires the controller: watch Seal, own the objects it writes,
+// and reconcile again when an ExposureClass changes.
+func (r *SealManager) SetupWithManager(ctx context.Context, name string, mgr ctrl.Manager) error {
+	err := mgr.GetFieldIndexer().IndexField(ctx, &sealsv1.Seal{},
+		exposureClassIndex, exposureClassIndexKeys)
+	if err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		For(&sealsv1.Seal{}).
 		Owns(&netv1.NetworkPolicy{}).
+		Owns(gatewayapi.New(gatewayapi.ListenerSetGVK)).
+		Owns(gatewayapi.New(gatewayapi.TCPRouteGVK)).
+		Watches(&sealsv1.ExposureClass{}, handler.EnqueueRequestsFromMapFunc(r.sealsForClass)).
+		WithOptions(sealControllerOptions()).
 		Complete(r)
 }

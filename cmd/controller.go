@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"flag"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 
@@ -26,6 +27,7 @@ import (
 	//+kubebuilder:scaffold:imports
 	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"github.com/helmetica-framework/sigillum/controllers"
+	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 )
 
 var (
@@ -46,7 +48,7 @@ func init() {
 
 	controllerCmd.Flags().StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	controllerCmd.Flags().StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
-	controllerCmd.Flags().BoolVar(&enableLeaderElection, "leader-elect", false,
+	controllerCmd.Flags().BoolVar(&enableLeaderElection, "leader-elect", true,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
 
@@ -73,6 +75,7 @@ func newScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
 	utilruntime.Must(sealsv1.AddToScheme(scheme))
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	utilruntime.Must(gatewayapi.Register(scheme))
 	//+kubebuilder:scaffold:scheme
 	return scheme
 }
@@ -150,13 +153,15 @@ func runController(cmd *cobra.Command, _ []string) error {
 	lifetimeCtx := cmd.Context()
 
 	sm := controllers.SealManager{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("seal-controller"),
-		Log:      mgr.GetLogger().WithName("seal-controller"),
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Recorder:  mgr.GetEventRecorder("seal-controller"),
+		Log:       mgr.GetLogger().WithName("seal-controller"),
+		APIReader: mgr.GetAPIReader(),
+		Rand:      rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
 	}
 
-	if err := sm.SetupWithManager("seal", mgr); err != nil {
+	if err := sm.SetupWithManager(lifetimeCtx, "seal", mgr); err != nil {
 		return fmt.Errorf("unable to create Seal controller: %w", err)
 	}
 

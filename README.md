@@ -42,6 +42,10 @@ kubectl apply -k config/crd
 kubectl apply -k config/default
 ```
 
+**Keep leader election on when you run more than one replica.** It is on by
+default. With `--leader-elect=false`, two replicas hand out the same port to
+different exposures.
+
 ## Structure
 
 | Path | What's there |

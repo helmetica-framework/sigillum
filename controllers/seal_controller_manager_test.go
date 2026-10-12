@@ -89,6 +89,7 @@ func newManagerInNamespace(ns *corev1.Namespace, objs ...client.Object) (*SealMa
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithStatusSubresource(&sealsv1.Seal{}).
+		WithIndex(&sealsv1.Seal{}, exposureClassIndex, exposureClassIndexKeys).
 		// Seal applies are checked against the generated schema. Anything the
 		// generated converter does not know falls through to the deduced one,
 		// which is what NetworkPolicy needs: the fake client still lists it in
