@@ -8,3 +8,11 @@ spec:
   # Set this instead to let every namespace in the cluster reach this one.
   # It overrides allowedNamespaces and the claim namespace.
   # allowAllNamespaces: true
+
+  # No exposureClass, so this uses the class named after the protocol: "tcp".
+  expose:
+    - name: service
+      protocol: TCP
+      backend:
+        service: sample
+        port: 6379
