@@ -57,7 +57,7 @@ build-docker: binary
 
 # Run the controller from your host
 run: manifests generate fmt vet
-    go run main.go controller
+    go run main.go controller --leader-elect=false
 
 # Clean up the generated resources
 clean:

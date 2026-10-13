@@ -1,0 +1,23 @@
+# A sample, not part of the contract. Sigillum never creates
+# gateways: the platform provides the shard Gateways an ExposureClass selects.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tcp-0
+  namespace: istio-system
+  labels:
+    sigillum.io/shard-pool: tcp
+spec:
+  gatewayClassName: istio
+  allowedListeners:
+    namespaces:
+      from: Selector
+      selector:
+        matchExpressions:
+          - key: chrysopoeia.io/instance
+            operator: Exists
+  # A Gateway needs at least one listener of its own.
+  listeners:
+    - name: web
+      port: 8000
+      protocol: HTTP

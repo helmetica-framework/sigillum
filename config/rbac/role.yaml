@@ -20,6 +20,34 @@ rules:
   - create
   - patch
 - apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - gateways
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - listenersets
+  - tcproutes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
+  - listenersets/status
+  - tcproutes/status
+  verbs:
+  - get
+- apiGroups:
   - networking.k8s.io
   resources:
   - networkpolicies
@@ -29,6 +57,14 @@ rules:
   - list
   - patch
   - update
+  - watch
+- apiGroups:
+  - seals.helmetica.io
+  resources:
+  - exposureclasses
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - seals.helmetica.io

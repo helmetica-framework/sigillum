@@ -16,6 +16,26 @@ import (
 func ForKind(kind schema.GroupVersionKind) interface{} {
 	switch kind {
 	// Group=seals.helmetica.io, Version=v1
+	case v1.SchemeGroupVersion.WithKind("Backend"):
+		return &apiv1.BackendApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("Exposure"):
+		return &apiv1.ExposureApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("ExposureClass"):
+		return &apiv1.ExposureClassApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("ExposureClassSpec"):
+		return &apiv1.ExposureClassSpecApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("ExposureStatus"):
+		return &apiv1.ExposureStatusApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("ExposureTLS"):
+		return &apiv1.ExposureTLSApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("GatewaySelector"):
+		return &apiv1.GatewaySelectorApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("IssuerRef"):
+		return &apiv1.IssuerRefApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("ParentRef"):
+		return &apiv1.ParentRefApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("PortRange"):
+		return &apiv1.PortRangeApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("Seal"):
 		return &apiv1.SealApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("SealSpec"):
