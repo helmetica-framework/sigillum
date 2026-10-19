@@ -19,188 +19,6 @@ import (
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 )
 
-// readListenerSet fetches the ListenerSet a Seal owns. The second result is
-// false when there is none.
-func readListenerSet(t *testing.T, c client.Client, seal *sealsv1.Seal) (*unstructured.Unstructured, bool) {
-	t.Helper()
-
-	obj := gatewayapi.New(gatewayapi.ListenerSetGVK)
-	err := c.Get(context.Background(), client.ObjectKeyFromObject(seal), obj)
-	if apierrors.IsNotFound(err) {
-		return nil, false
-	}
-	require.NoError(t, err)
-
-	return obj, true
-}
-
-func tcpListener(name string, port int32) gatewayapi.Listener {
-	return gatewayapi.Listener{Name: name, Protocol: "TCP", Port: port}
-}
-
-func TestReconcileListenerSet_AppliesOneSetNamedAfterTheSeal(t *testing.T) {
-	s := seal(1)
-	m, c := newManager(s)
-
-	err := m.reconcileListenerSet(context.Background(), s, tcpRef("tcp-0"),
-		[]gatewayapi.Listener{tcpListener("direct", 30007)})
-	require.NoError(t, err)
-
-	obj, found := readListenerSet(t, c, s)
-
-	require.True(t, found, "one ListenerSet per Seal, named after the Seal")
-	assert.Equal(t, "sample", obj.GetName())
-	assert.Equal(t, "default", obj.GetNamespace())
-}
-
-func TestReconcileListenerSet_WritesEveryListener(t *testing.T) {
-	s := seal(1)
-	m, c := newManager(s)
-
-	err := m.reconcileListenerSet(context.Background(), s, tcpRef("tcp-0"),
-		[]gatewayapi.Listener{tcpListener("direct", 30007), tcpListener("admin", 30008)})
-	require.NoError(t, err)
-
-	obj, found := readListenerSet(t, c, s)
-	require.True(t, found)
-
-	assert.Equal(t, []gatewayapi.Listener{
-		{Name: "direct", Protocol: "TCP", Port: 30007},
-		{Name: "admin", Protocol: "TCP", Port: 30008},
-	}, gatewayapi.Listeners(obj))
-}
-
-func TestReconcileListenerSet_ParentsToTheGivenShard(t *testing.T) {
-	s := seal(1)
-	m, c := newManager(s)
-
-	err := m.reconcileListenerSet(context.Background(), s, tcpRef("tcp-1"),
-		[]gatewayapi.Listener{tcpListener("direct", 30007)})
-	require.NoError(t, err)
-
-	obj, found := readListenerSet(t, c, s)
-	require.True(t, found)
-
-	parent, ok := gatewayapi.ParentShard(obj)
-
-	require.True(t, ok)
-	assert.Equal(t, tcpRef("tcp-1"), parent)
-}
-
-// Without blockOwnerDeletion the listener outlives the Seal and its port stays
-// claimed forever.
-func TestReconcileListenerSet_SetsTheControllerOwnerReference(t *testing.T) {
-	s := seal(1)
-	m, c := newManager(s)
-
-	err := m.reconcileListenerSet(context.Background(), s, tcpRef("tcp-0"),
-		[]gatewayapi.Listener{tcpListener("direct", 30007)})
-	require.NoError(t, err)
-
-	obj, found := readListenerSet(t, c, s)
-	require.True(t, found)
-
-	refs := obj.GetOwnerReferences()
-
-	require.Len(t, refs, 1)
-	assert.Equal(t, "Seal", refs[0].Kind)
-	assert.Equal(t, "sample", refs[0].Name)
-	assert.Equal(t, sealUID, refs[0].UID)
-	assert.True(t, *refs[0].Controller)
-	assert.True(t, *refs[0].BlockOwnerDeletion)
-}
-
-// spec.listeners requires at least one entry, so there is no such thing as an
-// empty ListenerSet to apply.
-func TestReconcileListenerSet_NoListenersDeletesAnExistingSet(t *testing.T) {
-	s := seal(1)
-	existing := listenerSet(t, "sample", "default", "tcp-0", 30007)
-	m, c := newManager(s, &existing)
-
-	err := m.reconcileListenerSet(context.Background(), s, tcpRef("tcp-0"), nil)
-	require.NoError(t, err)
-
-	_, found := readListenerSet(t, c, s)
-
-	assert.False(t, found, "the last exposure going away must remove the object")
-}
-
-func TestReconcileListenerSet_NoListenersAndNoSetIsNotAnError(t *testing.T) {
-	s := seal(1)
-	m, c := newManager(s)
-
-	err := m.reconcileListenerSet(context.Background(), s, tcpRef("tcp-0"), nil)
-
-	require.NoError(t, err, "a Seal that never had a TCP exposure reconciles cleanly")
-	_, found := readListenerSet(t, c, s)
-	assert.False(t, found)
-}
-
-// Apply is the whole reason a dropped exposure cleans itself up: a listener this
-// field manager stops sending is removed from the object.
-func TestReconcileListenerSet_DroppingAListenerRemovesIt(t *testing.T) {
-	s := seal(1)
-	m, c := newManager(s)
-	ctx := context.Background()
-
-	require.NoError(t, m.reconcileListenerSet(ctx, s, tcpRef("tcp-0"),
-		[]gatewayapi.Listener{tcpListener("direct", 30007), tcpListener("admin", 30008)}))
-
-	require.NoError(t, m.reconcileListenerSet(ctx, s, tcpRef("tcp-0"),
-		[]gatewayapi.Listener{tcpListener("direct", 30007)}))
-
-	obj, found := readListenerSet(t, c, s)
-	require.True(t, found)
-
-	assert.Equal(t, []gatewayapi.Listener{{Name: "direct", Protocol: "TCP", Port: 30007}},
-		gatewayapi.Listeners(obj))
-}
-
-func TestReconcileListenerSet_ReapplyingTheSameListenersIsStable(t *testing.T) {
-	s := seal(1)
-	m, c := newManager(s)
-	ctx := context.Background()
-	want := []gatewayapi.Listener{tcpListener("direct", 30007)}
-
-	require.NoError(t, m.reconcileListenerSet(ctx, s, tcpRef("tcp-0"), want))
-	require.NoError(t, m.reconcileListenerSet(ctx, s, tcpRef("tcp-0"), want))
-
-	obj, found := readListenerSet(t, c, s)
-	require.True(t, found)
-
-	assert.Equal(t, want, gatewayapi.Listeners(obj),
-		"a settled Seal must not churn its own published ports")
-}
-
-// A bad port is a caller bug, not a cluster state. It must fail loud rather than
-// read as "no listeners, delete the set".
-func TestReconcileListenerSet_ABadPortIsAnErrorAndWritesNothing(t *testing.T) {
-	s := seal(1)
-	m, c := newManager(s)
-
-	err := m.reconcileListenerSet(context.Background(), s, tcpRef("tcp-0"),
-		[]gatewayapi.Listener{tcpListener("direct", 0)})
-
-	require.Error(t, err)
-	_, found := readListenerSet(t, c, s)
-	assert.False(t, found, "a rejected build must not write a partial object")
-}
-
-// The set already exists and the new build fails. Deleting it would take a live
-// address down over a caller bug.
-func TestReconcileListenerSet_ABadPortDoesNotDeleteTheExistingSet(t *testing.T) {
-	s := seal(1)
-	existing := listenerSet(t, "sample", "default", "tcp-0", 30007)
-	m, c := newManager(s, &existing)
-
-	err := m.reconcileListenerSet(context.Background(), s, tcpRef("tcp-0"),
-		[]gatewayapi.Listener{tcpListener("direct", 70000)})
-
-	require.Error(t, err)
-	_, found := readListenerSet(t, c, s)
-	assert.True(t, found, "a build error must not tear down working listeners")
-}
-
 // tcpExposure is one TCP exposure pointing at the redis service.
 func tcpExposure(name string, port int32) sealsv1.Exposure {
 	return sealsv1.Exposure{
@@ -316,7 +134,7 @@ func TestReconcileTCPRoutes_BindsToTheExposuresListener(t *testing.T) {
 
 	p := parents[0].(map[string]any)
 	assert.Equal(t, "ListenerSet", p["kind"])
-	assert.Equal(t, "sample", p["name"])
+	assert.Equal(t, "sample-direct", p["name"])
 	assert.Equal(t, "direct", p["sectionName"])
 }
 
@@ -647,4 +465,399 @@ func TestRollUp_WaitingDoesNotHideAFailedPolicy(t *testing.T) {
 	assert.Equal(t, sealsv1.SealPhaseFailed, got.Phase)
 	assert.Equal(t, "reconciling network policy: boom", got.Message)
 	require.Len(t, got.Exposures, 1)
+}
+
+// readSetNamed fetches the ListenerSet name in the default namespace. The
+// second result is false when there is none.
+func readSetNamed(t *testing.T, c client.Client, name string) (*unstructured.Unstructured, bool) {
+	t.Helper()
+
+	obj := gatewayapi.New(gatewayapi.ListenerSetGVK)
+	err := c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: name}, obj)
+	if apierrors.IsNotFound(err) {
+		return nil, false
+	}
+	require.NoError(t, err)
+
+	return obj, true
+}
+
+// ownedSetNames lists the names of the ListenerSets the test Seal controls,
+// sorted.
+func ownedSetNames(t *testing.T, c client.Client) []string {
+	t.Helper()
+
+	list := gatewayapi.NewList(gatewayapi.ListenerSetGVK)
+	require.NoError(t, c.List(context.Background(), list, client.InNamespace("default")))
+
+	names := []string{}
+	for i := range list.Items {
+		if metav1.IsControlledBy(&list.Items[i], seal(1)) {
+			names = append(names, list.Items[i].GetName())
+		}
+	}
+	sort.Strings(names)
+
+	return names
+}
+
+func tcpListener(name string, port int32) gatewayapi.Listener {
+	return gatewayapi.Listener{Name: name, Protocol: "TCP", Port: port}
+}
+
+func want(exposure, shard string, port int32) wantSet {
+	return wantSet{Exposure: exposure, Parent: tcpRef(shard), Port: port}
+}
+
+// directSet is the set of exposure "direct" on tcp-0.
+func directSet(t *testing.T, port int64, conds ...any) *unstructured.Unstructured {
+	t.Helper()
+
+	return ownedSet(t, "sample-direct", "direct", "tcp-0", port, conds...)
+}
+
+func TestReconcileListenerSets_AppliesOneSetPerExposure(t *testing.T) {
+	s := seal(1)
+	m, c := newManager(s)
+
+	err := m.reconcileListenerSets(context.Background(), s,
+		[]wantSet{want("direct", "tcp-0", 30007), want("admin", "tcp-0", 30008)}, nil)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"sample-admin", "sample-direct"}, ownedSetNames(t, c))
+}
+
+func TestReconcileListenerSets_EachSetHoldsOneListenerNamedAfterTheExposure(t *testing.T) {
+	s := seal(1)
+	m, c := newManager(s)
+
+	err := m.reconcileListenerSets(context.Background(), s,
+		[]wantSet{want("direct", "tcp-0", 30007), want("admin", "tcp-0", 30008)}, nil)
+	require.NoError(t, err)
+
+	direct, found := readSetNamed(t, c, "sample-direct")
+	require.True(t, found)
+	assert.Equal(t, []gatewayapi.Listener{tcpListener("direct", 30007)}, gatewayapi.Listeners(direct))
+
+	admin, found := readSetNamed(t, c, "sample-admin")
+	require.True(t, found)
+	assert.Equal(t, []gatewayapi.Listener{tcpListener("admin", 30008)}, gatewayapi.Listeners(admin))
+}
+
+func TestReconcileListenerSets_EachSetHasItsOwnShard(t *testing.T) {
+	s := seal(1)
+	m, c := newManager(s)
+
+	err := m.reconcileListenerSets(context.Background(), s,
+		[]wantSet{want("direct", "tcp-0", 30007), want("admin", "tcp-1", 30007)}, nil)
+	require.NoError(t, err)
+
+	direct, found := readSetNamed(t, c, "sample-direct")
+	require.True(t, found)
+	admin, found := readSetNamed(t, c, "sample-admin")
+	require.True(t, found)
+
+	got, ok := gatewayapi.ParentShard(direct)
+	require.True(t, ok)
+	assert.Equal(t, tcpRef("tcp-0"), got)
+
+	got, ok = gatewayapi.ParentShard(admin)
+	require.True(t, ok)
+	assert.Equal(t, tcpRef("tcp-1"), got)
+}
+
+// Without blockOwnerDeletion the listener outlives the Seal and its port stays
+// claimed forever.
+func TestReconcileListenerSets_SetsTheControllerOwnerReference(t *testing.T) {
+	s := seal(1)
+	m, c := newManager(s)
+
+	require.NoError(t, m.reconcileListenerSets(context.Background(), s,
+		[]wantSet{want("direct", "tcp-0", 30007)}, nil))
+
+	obj, found := readSetNamed(t, c, "sample-direct")
+	require.True(t, found)
+
+	refs := obj.GetOwnerReferences()
+	require.Len(t, refs, 1)
+	assert.Equal(t, "Seal", refs[0].Kind)
+	assert.Equal(t, "sample", refs[0].Name)
+	assert.Equal(t, sealUID, refs[0].UID)
+	assert.True(t, *refs[0].Controller)
+	assert.True(t, *refs[0].BlockOwnerDeletion)
+}
+
+func TestReconcileListenerSets_DeletesTheSetOfADroppedExposure(t *testing.T) {
+	s := seal(1)
+	m, c := newManager(s)
+	ctx := context.Background()
+
+	require.NoError(t, m.reconcileListenerSets(ctx, s,
+		[]wantSet{want("direct", "tcp-0", 30007), want("admin", "tcp-0", 30008)}, nil))
+	require.NoError(t, m.reconcileListenerSets(ctx, s,
+		[]wantSet{want("direct", "tcp-0", 30007)}, nil))
+
+	assert.Equal(t, []string{"sample-direct"}, ownedSetNames(t, c),
+		"a dropped exposure's set must go, or its port stays taken")
+}
+
+// This is the upgrade path from one set per Seal.
+func TestReconcileListenerSets_DeletesTheOldSealNamedSet(t *testing.T) {
+	s := seal(1)
+	m, c := newManager(s, ownedSet(t, "sample", "direct", "tcp-0", 30007))
+
+	require.NoError(t, m.reconcileListenerSets(context.Background(), s,
+		[]wantSet{want("direct", "tcp-0", 30100)}, nil))
+
+	assert.Equal(t, []string{"sample-direct"}, ownedSetNames(t, c))
+}
+
+// A kept set belongs to an exposure whose class is gone or that gave up on
+// conflicts. Its live traffic must survive.
+func TestReconcileListenerSets_KeepsASetMarkedKeep(t *testing.T) {
+	s := seal(1)
+	m, c := newManager(s, directSet(t, 30007))
+
+	require.NoError(t, m.reconcileListenerSets(context.Background(), s,
+		[]wantSet{want("admin", "tcp-0", 30008)}, []string{"direct"}))
+
+	assert.Equal(t, []string{"sample-admin", "sample-direct"}, ownedSetNames(t, c))
+	assert.EqualValues(t, 30007, exposurePort(t, c, "direct"))
+}
+
+// spec.listeners requires at least one entry, so there is no such thing as an
+// empty ListenerSet to apply.
+func TestReconcileListenerSets_NothingWantedDeletesEveryOwnedSet(t *testing.T) {
+	s := seal(1)
+	m, c := newManager(s, directSet(t, 30007), ownedSet(t, "sample-admin", "admin", "tcp-0", 30008))
+
+	require.NoError(t, m.reconcileListenerSets(context.Background(), s, nil, nil))
+
+	assert.Empty(t, ownedSetNames(t, c))
+}
+
+func TestReconcileListenerSets_NothingWantedAndNothingOwnedIsNotAnError(t *testing.T) {
+	s := seal(1)
+	m, c := newManager(s)
+
+	require.NoError(t, m.reconcileListenerSets(context.Background(), s, nil, nil))
+	assert.Empty(t, ownedSetNames(t, c))
+}
+
+func TestReconcileListenerSets_LeavesAnotherSealsSetAlone(t *testing.T) {
+	s := seal(1)
+	other := ownedSet(t, "other-direct", "direct", "tcp-0", 30009)
+	other.SetOwnerReferences([]metav1.OwnerReference{{
+		APIVersion: sealsv1.GroupVersion.String(),
+		Kind:       "Seal",
+		Name:       "other",
+		UID:        types.UID("99999999-2222-3333-4444-555555555555"),
+		Controller: ptr.To(true),
+	}})
+	m, c := newManager(s, other)
+
+	require.NoError(t, m.reconcileListenerSets(context.Background(), s, nil, nil))
+
+	_, found := readSetNamed(t, c, "other-direct")
+	assert.True(t, found)
+}
+
+func TestReconcileListenerSets_LeavesAnUnownedSetAlone(t *testing.T) {
+	s := seal(1)
+	unowned := listenerSet(t, "handmade", "default", "tcp-0", 30009)
+	m, c := newManager(s, &unowned)
+
+	require.NoError(t, m.reconcileListenerSets(context.Background(), s, nil, nil))
+
+	_, found := readSetNamed(t, c, "handmade")
+	assert.True(t, found)
+}
+
+func TestReconcileListenerSets_ReapplyingIsStable(t *testing.T) {
+	s := seal(1)
+	m, c := newManager(s)
+	ctx := context.Background()
+	sets := []wantSet{want("direct", "tcp-0", 30007)}
+
+	require.NoError(t, m.reconcileListenerSets(ctx, s, sets, nil))
+	require.NoError(t, m.reconcileListenerSets(ctx, s, sets, nil))
+
+	assert.Equal(t, []string{"sample-direct"}, ownedSetNames(t, c))
+	assert.EqualValues(t, 30007, exposurePort(t, c, "direct"),
+		"a settled Seal must not churn its own published ports")
+}
+
+// A bad port is a caller bug. Nothing may be written, not even the good sets.
+func TestReconcileListenerSets_ABadPortIsAnErrorAndWritesNothing(t *testing.T) {
+	s := seal(1)
+	m, c := newManager(s)
+
+	err := m.reconcileListenerSets(context.Background(), s,
+		[]wantSet{want("direct", "tcp-0", 30007), want("admin", "tcp-0", 0)}, nil)
+
+	require.Error(t, err)
+	assert.Empty(t, ownedSetNames(t, c))
+}
+
+// Deleting would take live addresses down over a caller bug.
+func TestReconcileListenerSets_ABadPortDoesNotDeleteExistingSets(t *testing.T) {
+	s := seal(1)
+	m, c := newManager(s, directSet(t, 30007))
+
+	err := m.reconcileListenerSets(context.Background(), s,
+		[]wantSet{want("admin", "tcp-0", 70000)}, nil)
+
+	require.Error(t, err)
+	assert.Equal(t, []string{"sample-direct"}, ownedSetNames(t, c))
+}
+
+func TestOwnedSets_KeepsOnlyTheSealsSets(t *testing.T) {
+	mine := directSet(t, 30007)
+	other := listenerSet(t, "handmade", "default", "tcp-0", 30009)
+
+	got := ownedSets([]unstructured.Unstructured{*mine, other}, seal(1))
+
+	require.Len(t, got, 1)
+	assert.Contains(t, got, "sample-direct")
+}
+
+func TestOwnedSets_EmptyInput(t *testing.T) {
+	assert.Empty(t, ownedSets(nil, seal(1)))
+}
+
+func TestReadOwnedSets_ListsOnlyTheSealsSetsInItsNamespace(t *testing.T) {
+	s := seal(1)
+	elsewhere := ownedSet(t, "sample-admin", "admin", "tcp-0", 30008)
+	elsewhere.SetNamespace("other-ns")
+	unowned := listenerSet(t, "handmade", "default", "tcp-0", 30009)
+	m, _ := newManager(s, directSet(t, 30007), elsewhere, &unowned)
+
+	got, err := readOwnedSets(context.Background(), m.Client, s)
+
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	assert.Contains(t, got, "sample-direct")
+}
+
+func TestReadOwnedSets_NoSetsIsAnEmptyMap(t *testing.T) {
+	s := seal(1)
+	m, _ := newManager(s)
+
+	got, err := readOwnedSets(context.Background(), m.Client, s)
+
+	require.NoError(t, err)
+	assert.Empty(t, got)
+}
+
+func TestListenerPort_FindsTheExposure(t *testing.T) {
+	port, ok := listenerPort(directSet(t, 30007), "direct")
+
+	assert.True(t, ok)
+	assert.EqualValues(t, 30007, port)
+}
+
+func TestListenerPort_OtherNameOrNoSet(t *testing.T) {
+	_, ok := listenerPort(directSet(t, 30007), "admin")
+	assert.False(t, ok)
+
+	_, ok = listenerPort(nil, "direct")
+	assert.False(t, ok)
+}
+
+func TestNewPlacer_CountsListenersPerShard(t *testing.T) {
+	sets := []unstructured.Unstructured{
+		listenerSet(t, "a", "ns", "tcp-0", 30000, 30001),
+		listenerSet(t, "b", "ns", "tcp-1", 30002),
+	}
+
+	p := newPlacer(sets)
+
+	assert.Equal(t, 2, p.counts[tcpRef("tcp-0")])
+	assert.Equal(t, 1, p.counts[tcpRef("tcp-1")])
+}
+
+func TestNewPlacer_NoSets(t *testing.T) {
+	p := newPlacer(nil)
+
+	assert.Empty(t, p.counts)
+	assert.NotNil(t, p.takenOn(tcpRef("tcp-0"), nil, nil))
+	assert.Empty(t, p.takenOn(tcpRef("tcp-0"), nil, nil))
+}
+
+func TestPlacerTakenOn_HoldsOtherSetsPortsOnTheShard(t *testing.T) {
+	sets := []unstructured.Unstructured{
+		listenerSet(t, "a", "ns", "tcp-0", 30000),
+		listenerSet(t, "b", "ns", "tcp-1", 30001),
+	}
+
+	taken := newPlacer(sets).takenOn(tcpRef("tcp-0"), nil, nil)
+
+	assert.Equal(t, map[int32]struct{}{30000: {}}, taken)
+}
+
+// A sticky exposure re-picks nothing, but a move on the same shard may reuse
+// its own old port.
+func TestPlacerTakenOn_FreesTheOwnPort(t *testing.T) {
+	own := directSet(t, 30007)
+	p := newPlacer([]unstructured.Unstructured{*own})
+
+	assert.Empty(t, p.takenOn(tcpRef("tcp-0"), own, nil))
+}
+
+func TestPlacerTakenOn_KeepsAConflictedOwnPort(t *testing.T) {
+	own := directSet(t, 30007)
+	p := newPlacer([]unstructured.Unstructured{*own})
+
+	taken := p.takenOn(tcpRef("tcp-0"), own, map[string]struct{}{"direct": {}})
+
+	assert.Contains(t, taken, int32(30007), "handing it back would reproduce the conflict")
+}
+
+func TestPlacerTakenOn_SiblingPortsAreTaken(t *testing.T) {
+	own := directSet(t, 30007)
+	sibling := ownedSet(t, "sample-admin", "admin", "tcp-0", 30008)
+	p := newPlacer([]unstructured.Unstructured{*own, *sibling})
+
+	taken := p.takenOn(tcpRef("tcp-0"), own, nil)
+
+	assert.Equal(t, map[int32]struct{}{30008: {}}, taken)
+}
+
+func TestPlacerClaim_PortIsTakenOnThatShardOnly(t *testing.T) {
+	p := newPlacer(nil)
+
+	p.claim(tcpRef("tcp-0"), 30007, true)
+
+	assert.Contains(t, p.takenOn(tcpRef("tcp-0"), nil, nil), int32(30007))
+	assert.NotContains(t, p.takenOn(tcpRef("tcp-1"), nil, nil), int32(30007),
+		"each shard has its own IP, so the same port elsewhere is free")
+}
+
+func TestPlacerClaim_AMoveCountsAListener(t *testing.T) {
+	p := newPlacer(nil)
+
+	p.claim(tcpRef("tcp-0"), 30007, true)
+	p.claim(tcpRef("tcp-0"), 30008, true)
+
+	assert.Equal(t, 2, p.counts[tcpRef("tcp-0")])
+}
+
+func TestPlacerClaim_AStickyExposureDoesNotCountTwice(t *testing.T) {
+	own := directSet(t, 30007)
+	p := newPlacer([]unstructured.Unstructured{*own})
+
+	p.claim(tcpRef("tcp-0"), 30007, false)
+
+	assert.Equal(t, 1, p.counts[tcpRef("tcp-0")])
+}
+
+// Callers add to the result, so it must be a copy.
+func TestPlacerTakenOn_DoesNotChangeThePlacer(t *testing.T) {
+	p := newPlacer(nil)
+	p.claim(tcpRef("tcp-0"), 30007, true)
+
+	taken := p.takenOn(tcpRef("tcp-0"), nil, nil)
+	taken[30008] = struct{}{}
+
+	assert.NotContains(t, p.takenOn(tcpRef("tcp-0"), nil, nil), int32(30008))
 }

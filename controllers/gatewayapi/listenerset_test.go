@@ -1,12 +1,14 @@
 package gatewayapi
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/utils/ptr"
 )
 
@@ -505,4 +507,23 @@ func TestListenerStates_NoStatusIsEmpty(t *testing.T) {
 
 func TestListenerStates_NilObjectIsEmpty(t *testing.T) {
 	assert.Empty(t, ListenerStates(nil))
+}
+
+func TestListenerSetName_JoinsSealAndExposure(t *testing.T) {
+	assert.Equal(t, "networkconfig-direct", ListenerSetName("networkconfig", "direct"))
+}
+
+// The route finds its listener by this name, so the two must never drift.
+func TestListenerSetName_MatchesTheRouteName(t *testing.T) {
+	long := strings.Repeat("a", 200)
+
+	assert.Equal(t, RouteName("networkconfig", "direct"), ListenerSetName("networkconfig", "direct"))
+	assert.Equal(t, RouteName(long, long), ListenerSetName(long, long))
+}
+
+func TestListenerSetName_LongNamesAreValid(t *testing.T) {
+	name := ListenerSetName(strings.Repeat("a", 200), strings.Repeat("b", 200))
+
+	assert.LessOrEqual(t, len(name), maxNameLength)
+	assert.Empty(t, validation.IsDNS1123Subdomain(name))
 }

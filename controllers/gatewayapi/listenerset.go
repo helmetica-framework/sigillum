@@ -28,6 +28,12 @@ type Listener struct {
 	Port     int32
 }
 
+// ListenerSetName is the name of the ListenerSet that holds one exposure's
+// listener. It is the same as the exposure's TCPRoute name.
+func ListenerSetName(sealName, exposureName string) string {
+	return RouteName(sealName, exposureName)
+}
+
 // ListenerState is what the gateway controller last said about one listener's
 // port.
 type ListenerState int

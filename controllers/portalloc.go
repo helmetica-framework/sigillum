@@ -151,5 +151,6 @@ func stepConflict(count int32, state gatewayapi.ListenerState) (conflictAction, 
 func conflictMessage(exposure string, port int32, shard gatewayapi.ShardRef) string {
 	return fmt.Sprintf(
 		"exposure %q: port %d on shard %s/%s still conflicts after %d moves, sigillum stopped moving it: ask the platform operator to check the shard's listeners",
-		exposure, port, shard.Namespace, shard.Name, maxConflictMoves)
+		exposure, port, shard.Namespace, shard.Name, maxConflictMoves,
+	)
 }

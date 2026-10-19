@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 
 	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
@@ -32,48 +31,6 @@ type exposureResult struct {
 	RouteMsg      string
 	ConflictCount int32
 	Err           error
-}
-
-// reconcileListenerSet drives this Seal's one ListenerSet to match listeners.
-//
-// A Seal with no TCP exposures gets no ListenerSet at all. spec.listeners
-// requires at least one entry, so an empty list means delete the object rather
-// than apply an invalid one.
-func (r *SealManager) reconcileListenerSet(
-	ctx context.Context,
-	seal *sealsv1.Seal,
-	parent gatewayapi.ShardRef,
-	listeners []gatewayapi.Listener,
-) error {
-	owner, err := controllerRef(seal, r.Scheme)
-	if err != nil {
-		return fmt.Errorf("building owner reference: %w", err)
-	}
-
-	ls, err := gatewayapi.BuildListenerSet(seal.GetName(), seal.GetNamespace(), parent, listeners, owner)
-	if err != nil {
-		return fmt.Errorf("building listenerset: %w", err)
-	}
-
-	if ls == nil {
-		target := gatewayapi.New(gatewayapi.ListenerSetGVK)
-		target.SetName(seal.GetName())
-		target.SetNamespace(seal.GetNamespace())
-
-		err := r.Delete(ctx, target)
-		if err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("deleting listenerset: %w", err)
-		}
-
-		return nil
-	}
-
-	err = r.Apply(ctx, client.ApplyConfigurationFromUnstructured(ls), fieldOwner, client.ForceOwnership)
-	if err != nil {
-		return fmt.Errorf("applying listenerset: %w", err)
-	}
-
-	return nil
 }
 
 // reconcileTCPRoutes drives this Seal's TCPRoutes to match exposures: one route
@@ -216,7 +173,7 @@ func rollUp(outcomes []exposureOutcome, done phase) phase {
 	return done
 }
 
-// reconcileExposures drives the ListenerSet and TCPRoutes for seal's
+// reconcileExposures drives the ListenerSets and TCPRoutes for seal's
 // exposures and reports one outcome per exposure, in spec order.
 //
 // The error is for problems a retry might fix. Everything else is only
@@ -294,49 +251,41 @@ func (r *SealManager) reconcileExposures(
 		}
 	}
 
-	own, err := readOwnListenerSet(ctx, r.Client, seal)
+	own, err := readOwnedSets(ctx, r.Client, seal)
 	if err != nil {
 		return fail(err)
 	}
 
 	// A conflict in the cache can be old. Check it live before moving a port.
-	states := gatewayapi.ListenerStates(own)
-	for _, s := range states {
-		if s == gatewayapi.ListenerConflicted {
-			own, err = readOwnListenerSet(ctx, r.APIReader, seal)
-			if err != nil {
-				return fail(err)
-			}
-			states = gatewayapi.ListenerStates(own)
-			break
+	if hasConflict(own) {
+		own, err = readOwnedSets(ctx, r.APIReader, seal)
+		if err != nil {
+			return fail(err)
 		}
 	}
 
-	ports := listenerPorts(own)
-
 	mustMove := make([]bool, len(seal.Spec.Expose))
 	counts := make([]int32, len(seal.Spec.Expose))
-	conflicted := map[string]struct{}{}
 
 	for i, e := range seal.Spec.Expose {
 		if classOf[i] == nil {
 			continue
 		}
 
-		port, has := ports[e.Name]
+		set := exposureSet(own, seal, e.Name)
+		port, has := listenerPort(set, e.Name)
 		if !has {
 			continue // new exposure, placement gives it a port
 		}
 
-		action, count := stepConflict(prev[e.Name].ConflictCount, states[e.Name])
+		action, count := stepConflict(prev[e.Name].ConflictCount, gatewayapi.ListenerStates(set)[e.Name])
 		counts[i] = count
 
 		switch action {
 		case movePort:
 			mustMove[i] = true
-			conflicted[e.Name] = struct{}{}
 		case giveUp:
-			shard, _ := gatewayapi.ParentShard(own)
+			shard, _ := gatewayapi.ParentShard(set)
 			outcomes[i] = exposureOutcome{
 				Status: buildExposureStatus(e, classOf[i].GetName(), exposureResult{
 					Shard:         shard.Name,
@@ -351,168 +300,139 @@ func (r *SealManager) reconcileExposures(
 		}
 	}
 
-	// One ListenerSet per Seal means one shard per Seal. The first exposure
-	// with a class picks it.
-	first := -1
-	for i := range classOf {
-		if classOf[i] != nil {
-			first = i
-			break
-		}
-	}
-
-	var (
-		shard  gatewayapi.ShardRef
-		sticky bool
-		sets   []unstructured.Unstructured
-	)
-	if first >= 0 {
-		shards, err := r.listShards(ctx, classOf[first])
-		if err != nil {
-			return fail(err)
-		}
-
-		_, sticky = stickyShard(own, shards)
-
-		// Read live only when a port must be picked.
-		needPort := !sticky
-		for i, e := range seal.Spec.Expose {
-			if _, has := ports[e.Name]; classOf[i] != nil && (!has || mustMove[i]) {
-				needPort = true
-			}
-		}
-		if needPort {
-			sets, err = r.listAllListenerSets(ctx, true)
-			if err != nil {
-				return fail(err)
-			}
-
-			// The cache may not have seen the ListenerSet written a moment ago.
-			own = findOwn(sets, seal)
-			ports = listenerPorts(own)
-		}
-
-		shard, sticky = stickyShard(own, shards)
-
-		if !sticky {
-			shard, err = placeExposure(shards, shardCounts(sets), classOf[first])
-			if err != nil {
-				err = fmt.Errorf("exposure %q: %w", seal.Spec.Expose[first].Name, err)
-				for i, e := range seal.Spec.Expose {
-					if classOf[i] != nil {
-						outcomes[i] = exposureOutcome{
-							Status: buildExposureStatus(e, classOf[i].GetName(), exposureResult{Err: err}),
-							Failed: true,
-						}
-					}
-				}
-				return outcomes, err
-			}
-		}
-
-		for i, e := range seal.Spec.Expose {
-			if classOf[i] == nil || classOf[i].GetName() == classOf[first].GetName() {
-				continue
-			}
-
-			match, err := r.listShards(ctx, classOf[i])
-			if err != nil {
-				return fail(err)
-			}
-			if slices.Contains(match, shard) {
-				continue
-			}
-
-			err = fmt.Errorf(
-				"exposure %q: class %q does not match shard %s/%s, which exposure %q uses: all TCP exposures of one Seal share one shard",
-				e.Name, classOf[i].GetName(), shard.Namespace, shard.Name, seal.Spec.Expose[first].Name)
-			outcomes[i] = exposureOutcome{
-				Status: buildExposureStatus(e, classOf[i].GetName(), exposureResult{Err: err}),
-				Failed: true,
-			}
-			classOf[i] = nil
-		}
-	}
-
-	taken := takenPortsWithConflicts(sets, shard, own, conflicted)
-
-	// The Seal's own ports are not in taken, but the ports that stay are still
-	// in use by this ListenerSet.
-	for i, e := range seal.Spec.Expose {
-		port, has := ports[e.Name]
-		if !has {
-			continue
-		}
-		if keepAsIs[i] || (classOf[i] != nil && sticky && !mustMove[i]) {
-			taken[port] = struct{}{}
-		}
-	}
-	res := make([]exposureResult, len(seal.Spec.Expose))
-	var listeners []gatewayapi.Listener
+	shardsOf := map[string][]gatewayapi.ShardRef{}
+	needPort := false
 
 	for i, e := range seal.Spec.Expose {
-		port, has := ports[e.Name]
-
-		if keepAsIs[i] {
-			if has {
-				listeners = append(listeners, gatewayapi.Listener{Name: e.Name, Protocol: "TCP", Port: port})
-			}
-			continue
-		}
 		if classOf[i] == nil {
 			continue
 		}
 
-		// A new shard means new ports: the old ones belong to the old shard.
-		if !has || mustMove[i] || !sticky {
-			var err error
-			if classOf[i].Spec.PortRange == nil {
-				err = fmt.Errorf("exposure class %q has no portRange", classOf[i].GetName())
-			} else {
-				port, err = allocatePort(*classOf[i].Spec.PortRange, taken, r.random())
-			}
+		name := classOf[i].GetName()
+		if _, done := shardsOf[name]; !done {
+			shards, err := r.listShards(ctx, classOf[i])
 			if err != nil {
-				outcomes[i] = exposureOutcome{
-					Status: buildExposureStatus(e, classOf[i].GetName(), exposureResult{Err: err}),
-					Failed: true,
-				}
-				classOf[i] = nil
-				continue
+				return fail(err)
 			}
-			taken[port] = struct{}{}
+			shardsOf[name] = shards
 		}
 
-		listeners = append(listeners, gatewayapi.Listener{Name: e.Name, Protocol: "TCP", Port: port})
+		set := exposureSet(own, seal, e.Name)
+		_, has := listenerPort(set, e.Name)
+		_, sticky := stickyShard(set, shardsOf[name])
+		if !has || mustMove[i] || !sticky {
+			needPort = true
+		}
+	}
+
+	// Read live only when a port must be picked.
+	var sets []unstructured.Unstructured
+	if needPort {
+		sets, err = r.listAllListenerSets(ctx, true)
+		if err != nil {
+			return fail(err)
+		}
+
+		// The cache may not have seen the sets written a moment ago.
+		own = ownedSets(sets, seal)
+	}
+
+	p := newPlacer(sets)
+	res := make([]exposureResult, len(seal.Spec.Expose))
+	placed := make([]gatewayapi.ShardRef, len(seal.Spec.Expose))
+	var (
+		wants    []wantSet
+		placeErr error
+	)
+
+	failOne := func(i int, err error) {
+		outcomes[i] = exposureOutcome{
+			Status: buildExposureStatus(seal.Spec.Expose[i], classOf[i].GetName(), exposureResult{Err: err}),
+			Failed: true,
+		}
+		classOf[i] = nil
+	}
+
+	for i, e := range seal.Spec.Expose {
+		class := classOf[i]
+		if class == nil {
+			continue
+		}
+
+		set := exposureSet(own, seal, e.Name)
+		shards := shardsOf[class.GetName()]
+
+		shard, sticky := stickyShard(set, shards)
+		if !sticky {
+			shard, err = placeExposure(shards, p.counts, class)
+			if err != nil {
+				err = fmt.Errorf("exposure %q: %w", e.Name, err)
+				if placeErr == nil {
+					placeErr = err
+				}
+				failOne(i, err)
+				continue
+			}
+		}
+
+		// A new shard means a new port: the old one belongs to the old shard.
+		port, has := listenerPort(set, e.Name)
+		if !has || mustMove[i] || !sticky {
+			var conflicted map[string]struct{}
+			if mustMove[i] {
+				conflicted = map[string]struct{}{e.Name: {}}
+			}
+
+			if class.Spec.PortRange == nil {
+				err = fmt.Errorf("exposure class %q has no portRange", class.GetName())
+			} else {
+				port, err = allocatePort(*class.Spec.PortRange, p.takenOn(shard, set, conflicted), r.random())
+			}
+			if err != nil {
+				failOne(i, err)
+				continue
+			}
+		}
+
+		p.claim(shard, port, !sticky)
+		wants = append(wants, wantSet{Exposure: e.Name, Parent: shard, Port: port})
+		placed[i] = shard
 		res[i] = exposureResult{Shard: shard.Name, Port: port, ConflictCount: counts[i]}
 	}
 
-	parent := shard
-	if first < 0 {
-		parent, _ = gatewayapi.ParentShard(own) // only kept listeners are left
-	}
-	if err := r.reconcileListenerSet(ctx, seal, parent, listeners); err != nil {
-		return fail(err)
-	}
-
-	var routed []sealsv1.Exposure
+	var (
+		keep   []string
+		routed []sealsv1.Exposure
+	)
 	for i, e := range seal.Spec.Expose {
-		_, has := ports[e.Name]
+		_, has := listenerPort(exposureSet(own, seal, e.Name), e.Name)
+		if keepAsIs[i] && has {
+			keep = append(keep, e.Name)
+		}
 		if classOf[i] != nil || (keepAsIs[i] && has) {
 			routed = append(routed, e)
 		}
+	}
+
+	if err := r.reconcileListenerSets(ctx, seal, wants, keep); err != nil {
+		return fail(err)
 	}
 	if err := r.reconcileTCPRoutes(ctx, seal, routed); err != nil {
 		return fail(err)
 	}
 
-	addr := ""
-	if first >= 0 {
+	addrOf := map[gatewayapi.ShardRef]string{}
+	for _, w := range wants {
+		if _, done := addrOf[w.Parent]; done {
+			continue
+		}
+
 		gw := gatewayapi.New(gatewayapi.GatewayGVK)
-		err := r.Get(ctx, client.ObjectKey{Namespace: shard.Namespace, Name: shard.Name}, gw)
+		err := r.Get(ctx, client.ObjectKey{Namespace: w.Parent.Namespace, Name: w.Parent.Name}, gw)
 		if err != nil && !apierrors.IsNotFound(err) {
 			return fail(fmt.Errorf("getting gateway: %w", err))
 		}
-		addr, _ = gatewayapi.GatewayAddress(gw)
+		addrOf[w.Parent], _ = gatewayapi.GatewayAddress(gw)
 	}
 
 	for i, e := range seal.Spec.Expose {
@@ -529,43 +449,184 @@ func (r *SealManager) reconcileExposures(
 			return fail(fmt.Errorf("getting tcproute: %w", err))
 		}
 
-		res[i].Address = addr
+		res[i].Address = addrOf[placed[i]]
 		res[i].RouteReady, res[i].RouteMsg = gatewayapi.RouteIsReady(route)
 		outcomes[i] = exposureOutcome{Status: buildExposureStatus(e, classOf[i].GetName(), res[i])}
 	}
 
-	return outcomes, nil
+	// Returned last, so the siblings of an exposure that found no room are
+	// still written.
+	return outcomes, placeErr
 }
 
-// findOwn picks the Seal's own ListenerSet out of sets. Nil means none.
-func findOwn(sets []unstructured.Unstructured, seal *sealsv1.Seal) *unstructured.Unstructured {
-	for i := range sets {
-		if sets[i].GetName() == seal.GetName() && sets[i].GetNamespace() == seal.GetNamespace() {
-			return &sets[i]
+// placer tracks shard use while one pass places exposures one by one. Without
+// it, two exposures placed in the same pass would see the same free slot and
+// the same free port.
+type placer struct {
+	sets    []unstructured.Unstructured
+	counts  map[gatewayapi.ShardRef]int
+	claimed map[gatewayapi.ShardRef]map[int32]struct{}
+}
+
+func newPlacer(sets []unstructured.Unstructured) *placer {
+	return &placer{
+		sets:    sets,
+		counts:  shardCounts(sets),
+		claimed: map[gatewayapi.ShardRef]map[int32]struct{}{},
+	}
+}
+
+// takenOn is the set of ports in use on shard: every set's ports except own's
+// (unless conflicted), plus the ports claimed in this pass.
+func (p *placer) takenOn(shard gatewayapi.ShardRef, own *unstructured.Unstructured, conflicted map[string]struct{}) map[int32]struct{} {
+	taken := takenPortsWithConflicts(p.sets, shard, own, conflicted)
+
+	for port := range p.claimed[shard] {
+		taken[port] = struct{}{}
+	}
+
+	return taken
+}
+
+// claim records port on shard. moved is true when the exposure was not on
+// shard before, so shard has one more listener.
+func (p *placer) claim(shard gatewayapi.ShardRef, port int32, moved bool) {
+	if p.claimed[shard] == nil {
+		p.claimed[shard] = map[int32]struct{}{}
+	}
+	p.claimed[shard][port] = struct{}{}
+
+	if moved {
+		p.counts[shard]++
+	}
+}
+
+// wantSet is one exposure's ListenerSet: one listener for Exposure on Port,
+// parented to Parent.
+type wantSet struct {
+	Exposure string
+	Parent   gatewayapi.ShardRef
+	Port     int32
+}
+
+// reconcileListenerSets drives the Seal's ListenerSets to match want: one set
+// per exposure, and nothing left over. The sets of exposures named in keep
+// are left as they are.
+func (r *SealManager) reconcileListenerSets(
+	ctx context.Context,
+	seal *sealsv1.Seal,
+	want []wantSet,
+	keep []string,
+) error {
+	owner, err := controllerRef(seal, r.Scheme)
+	if err != nil {
+		return fmt.Errorf("building owner reference: %w", err)
+	}
+
+	// Build every set before applying any, so a bad port cannot leave half
+	// the sets applied.
+	sets := make([]*unstructured.Unstructured, 0, len(want))
+
+	for _, w := range want {
+		set, err := gatewayapi.BuildListenerSet(
+			gatewayapi.ListenerSetName(seal.GetName(), w.Exposure),
+			seal.GetNamespace(),
+			w.Parent,
+			[]gatewayapi.Listener{{Name: w.Exposure, Protocol: "TCP", Port: w.Port}},
+			owner,
+		)
+		if err != nil {
+			return fmt.Errorf("building listenerset: %w", err)
+		}
+
+		sets = append(sets, set)
+	}
+
+	applied := map[string]bool{}
+
+	for _, set := range sets {
+		err = r.Apply(ctx, client.ApplyConfigurationFromUnstructured(set), fieldOwner, client.ForceOwnership)
+		if err != nil {
+			return fmt.Errorf("applying listenerset %s: %w", set.GetName(), err)
+		}
+
+		applied[set.GetName()] = true
+	}
+
+	kept := make(map[string]bool, len(keep))
+	for _, name := range keep {
+		kept[gatewayapi.ListenerSetName(seal.GetName(), name)] = true
+	}
+
+	owned, err := readOwnedSets(ctx, r.Client, seal)
+	if err != nil {
+		return err
+	}
+
+	for name, set := range owned {
+		if applied[name] || kept[name] {
+			continue
+		}
+
+		if err := r.Delete(ctx, set); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("deleting listenerset %s: %w", name, err)
 		}
 	}
+
 	return nil
 }
 
-func listenerPorts(own *unstructured.Unstructured) map[string]int32 {
-	ports := map[string]int32{}
-	for _, l := range gatewayapi.Listeners(own) {
-		ports[l.Name] = l.Port
+// ownedSets picks the sets seal controls out of sets, keyed by name.
+func ownedSets(sets []unstructured.Unstructured, seal *sealsv1.Seal) map[string]*unstructured.Unstructured {
+	owned := map[string]*unstructured.Unstructured{}
+
+	for i := range sets {
+		if metav1.IsControlledBy(&sets[i], seal) {
+			owned[sets[i].GetName()] = &sets[i]
+		}
 	}
-	return ports
+
+	return owned
 }
 
-// readOwnListenerSet reads the Seal's own ListenerSet. Nil means there is none yet.
-func readOwnListenerSet(ctx context.Context, reader client.Reader, seal *sealsv1.Seal) (*unstructured.Unstructured, error) {
-	obj := gatewayapi.New(gatewayapi.ListenerSetGVK)
+// readOwnedSets lists the sets in the Seal's namespace and keeps the ones the
+// Seal controls, keyed by name.
+func readOwnedSets(ctx context.Context, reader client.Reader, seal *sealsv1.Seal) (map[string]*unstructured.Unstructured, error) {
+	list := gatewayapi.NewList(gatewayapi.ListenerSetGVK)
 
-	err := reader.Get(ctx, client.ObjectKeyFromObject(seal), obj)
-	if apierrors.IsNotFound(err) {
-		return nil, nil
-	}
+	err := reader.List(ctx, list, client.InNamespace(seal.GetNamespace()))
 	if err != nil {
-		return nil, fmt.Errorf("getting own listenerset: %w", err)
+		return nil, fmt.Errorf("listing own listenersets: %w", err)
 	}
 
-	return obj, nil
+	return ownedSets(list.Items, seal), nil
+}
+
+// exposureSet picks the set of exposure out of own. Nil means none.
+func exposureSet(own map[string]*unstructured.Unstructured, seal *sealsv1.Seal, exposure string) *unstructured.Unstructured {
+	return own[gatewayapi.ListenerSetName(seal.GetName(), exposure)]
+}
+
+// hasConflict reports whether any listener on sets is Conflicted.
+func hasConflict(sets map[string]*unstructured.Unstructured) bool {
+	for _, set := range sets {
+		for _, state := range gatewayapi.ListenerStates(set) {
+			if state == gatewayapi.ListenerConflicted {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// listenerPort is the port of the listener named exposure on set.
+func listenerPort(set *unstructured.Unstructured, exposure string) (int32, bool) {
+	for _, l := range gatewayapi.Listeners(set) {
+		if l.Name == exposure {
+			return l.Port, true
+		}
+	}
+
+	return 0, false
 }

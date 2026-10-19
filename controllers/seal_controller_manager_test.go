@@ -844,12 +844,20 @@ func readyRoute(t *testing.T, exposure string) *unstructured.Unstructured {
 	return &obj
 }
 
-// ownListenerSet is the Seal's ListenerSet on tcp-0 with one listener,
-// "direct", on port. conds is the gateway controller's verdict on it.
+// ownListenerSet is the set of exposure "direct" on tcp-0.
 func ownListenerSet(t *testing.T, port int64, conds ...any) *unstructured.Unstructured {
 	t.Helper()
 
-	obj := listenerSet(t, "sample", "default", "tcp-0", port)
+	return ownedSet(t, "sample-direct", "direct", "tcp-0", port, conds...)
+}
+
+// ownedSet is a ListenerSet called name that the test Seal controls, parented
+// to shard, with one listener called listener on port. conds is the gateway
+// controller's verdict on that listener.
+func ownedSet(t *testing.T, name, listener, shard string, port int64, conds ...any) *unstructured.Unstructured {
+	t.Helper()
+
+	obj := listenerSet(t, name, "default", shard, port)
 	obj.SetOwnerReferences([]metav1.OwnerReference{{
 		APIVersion:         sealsv1.GroupVersion.String(),
 		Kind:               "Seal",
@@ -861,35 +869,35 @@ func ownListenerSet(t *testing.T, port int64, conds ...any) *unstructured.Unstru
 
 	listeners, _, err := unstructured.NestedSlice(obj.Object, "spec", "listeners")
 	require.NoError(t, err)
-	listeners[0].(map[string]any)["name"] = "direct"
+	listeners[0].(map[string]any)["name"] = listener
 	require.NoError(t, unstructured.SetNestedSlice(obj.Object, listeners, "spec", "listeners"))
 
 	if len(conds) > 0 {
 		require.NoError(t, unstructured.SetNestedSlice(obj.Object, []any{
-			map[string]any{"name": "direct", "conditions": conds},
+			map[string]any{"name": listener, "conditions": conds},
 		}, "status", "listeners"))
 	}
 
 	return &obj
 }
 
-// ownListenerPort reads the port of the "direct" listener on the Seal's
-// ListenerSet.
+// exposurePort reads the port on the ListenerSet of exposure.
+func exposurePort(t *testing.T, c client.Client, exposure string) int32 {
+	t.Helper()
+
+	ls, found := readSetNamed(t, c, gatewayapi.ListenerSetName("sample", exposure))
+	require.True(t, found, "exposure %q must have a listenerset", exposure)
+
+	port, ok := listenerPort(ls, exposure)
+	require.True(t, ok, "no listener named %q", exposure)
+
+	return port
+}
+
 func ownListenerPort(t *testing.T, c client.Client) int32 {
 	t.Helper()
 
-	ls, found := readListenerSet(t, c, seal(1))
-	require.True(t, found, "the seal must have a listenerset")
-
-	for _, l := range gatewayapi.Listeners(ls) {
-		if l.Name == "direct" {
-			return l.Port
-		}
-	}
-
-	require.Fail(t, "no listener named direct")
-
-	return 0
+	return exposurePort(t, c, "direct")
 }
 
 func readSeal(t *testing.T, c client.Client) *sealsv1.Seal {
@@ -1134,9 +1142,7 @@ func TestReconcile_RemovingTheLastExposureCleansUp(t *testing.T) {
 	_, err = m.Reconcile(ctx, ctrl.Request{NamespacedName: sealKey()})
 	require.NoError(t, err)
 
-	ls := gatewayapi.New(gatewayapi.ListenerSetGVK)
-	err = c.Get(ctx, sealKey(), ls)
-	assert.True(t, apierrors.IsNotFound(err), "the listenerset must go, or its ports stay taken")
+	assert.Empty(t, ownedSetNames(t, c), "the listenerset must go, or its ports stay taken")
 
 	_, found := readTCPRoute(t, c, "sample-direct", "default")
 	assert.False(t, found)
@@ -1168,11 +1174,9 @@ func TestReconcile_SiblingsNeverShareAPort(t *testing.T) {
 
 	_, _ = m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
 
-	ls := gatewayapi.New(gatewayapi.ListenerSetGVK)
-	require.NoError(t, c.Get(context.Background(), sealKey(), ls))
-	listeners := gatewayapi.Listeners(ls)
-	require.Len(t, listeners, 1, "second must not get a port that direct already uses")
-	assert.EqualValues(t, 30007, listeners[0].Port)
+	assert.Equal(t, []string{"sample-direct"}, ownedSetNames(t, c),
+		"second must not get a port that direct already uses")
+	assert.EqualValues(t, 30007, exposurePort(t, c, "direct"))
 
 	got := readSeal(t, c)
 	require.Len(t, got.Status.Exposures, 2)
@@ -1182,6 +1186,10 @@ func TestReconcile_SiblingsNeverShareAPort(t *testing.T) {
 type failingReader struct{ client.Reader }
 
 func (failingReader) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
+	return errors.New("api server unavailable")
+}
+
+func (failingReader) List(context.Context, client.ObjectList, ...client.ListOption) error {
 	return errors.New("api server unavailable")
 }
 
@@ -1207,4 +1215,148 @@ func TestReconcile_ShortErrorKeepsTheLastStatus(t *testing.T) {
 	assert.EqualValues(t, 1, got.Status.Exposures[0].ConflictCount,
 		"a reset count lets the move limit be bypassed")
 	assert.Equal(t, before.Status.Exposures[0].Port, got.Status.Exposures[0].Port)
+}
+
+// poolClass is a TCP class on its own shard pool.
+func poolClass(name, pool string, maxPerShard int32) *sealsv1.ExposureClass {
+	c := class(name, sealsv1.ProtocolTCP)
+	c.Spec.ShardSelector = &metav1.LabelSelector{
+		MatchLabels: map[string]string{shardPoolLabel: pool},
+	}
+	c.Spec.PortRange = &sealsv1.PortRange{From: 30000, To: 30255}
+	c.Spec.MaxListenersPerShard = maxPerShard
+
+	return &c
+}
+
+// poolShard is a shard Gateway in pool. An empty addr means the gateway
+// controller has not given it one yet.
+func poolShard(t *testing.T, name, pool, addr string) *unstructured.Unstructured {
+	t.Helper()
+
+	obj := gatewayObj(name, "kgateway-system", map[string]string{shardPoolLabel: pool})
+	if addr != "" {
+		require.NoError(t, unstructured.SetNestedSlice(obj.Object, []any{
+			map[string]any{"type": "IPAddress", "value": addr},
+		}, "status", "addresses"))
+	}
+
+	return &obj
+}
+
+func exposureOn(name, className string, port int32) sealsv1.Exposure {
+	e := tcpExposure(name, port)
+	e.ExposureClass = className
+
+	return e
+}
+
+func TestReconcile_ExposuresOfDifferentClassesGetTheirOwnShards(t *testing.T) {
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{exposureOn("direct", "fast", 6379), exposureOn("admin", "slow", 9121)}
+	m, c := newManager(s,
+		poolClass("fast", "fast", 0), poolClass("slow", "slow", 0),
+		poolShard(t, "fast-0", "fast", "172.19.0.200"), poolShard(t, "slow-0", "slow", "172.19.0.201"),
+		readyRoute(t, "direct"), readyRoute(t, "admin"))
+
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err)
+
+	got := readSeal(t, c)
+	assert.Equal(t, sealsv1.SealPhaseReady, got.Status.Phase, got.Status.Message)
+	require.Len(t, got.Status.Exposures, 2)
+	assert.Equal(t, "fast-0", got.Status.Exposures[0].Shard)
+	assert.Equal(t, "172.19.0.200", got.Status.Exposures[0].Address)
+	assert.Equal(t, "slow-0", got.Status.Exposures[1].Shard)
+	assert.Equal(t, "172.19.0.201", got.Status.Exposures[1].Address,
+		"each exposure reports the address of its own shard")
+}
+
+// The placer must count a listener placed earlier in the same pass.
+func TestReconcile_ExposuresSpillToTheNextShardOneByOne(t *testing.T) {
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379), tcpExposure("admin", 9121)}
+	zero, one := tcpShard("tcp-0"), tcpShard("tcp-1")
+	m, c := newManager(s, tcpClass(1), &zero, &one)
+
+	_, _ = m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+
+	got := readSeal(t, c)
+	require.Len(t, got.Status.Exposures, 2)
+	assert.Equal(t, "tcp-0", got.Status.Exposures[0].Shard)
+	assert.Equal(t, "tcp-1", got.Status.Exposures[1].Shard,
+		"a shard with room for one listener takes only one exposure")
+}
+
+func TestReconcile_AFullClassDoesNotFailItsSibling(t *testing.T) {
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{exposureOn("direct", "full", 6379), tcpExposure("admin", 9121)}
+	other := listenerSet(t, "other", "other-ns", "full-0", 30000)
+	m, c := newManager(s,
+		poolClass("full", "full", 1), poolShard(t, "full-0", "full", ""), &other,
+		tcpClass(0), tcpShardWithAddress(t, "tcp-0", "172.19.0.200"), readyRoute(t, "admin"))
+
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	require.Error(t, err, "exhaustion is still a real error and must be returned")
+
+	got := readSeal(t, c)
+	assert.Equal(t, sealsv1.SealPhaseFailed, got.Status.Phase)
+	require.Len(t, got.Status.Exposures, 2)
+	assert.False(t, got.Status.Exposures[0].Ready)
+	assert.Contains(t, got.Status.Exposures[0].Message, "no shard")
+	assert.True(t, got.Status.Exposures[1].Ready, got.Status.Exposures[1].Message)
+	assert.Equal(t, []string{"sample-admin"}, ownedSetNames(t, c))
+}
+
+func TestReconcile_ConflictMovesOnlyTheConflictedExposure(t *testing.T) {
+	s := settledSeal(0)
+	s.Spec.Expose = append(s.Spec.Expose, tcpExposure("admin", 9121))
+	s.Status.Exposures = append(s.Status.Exposures, sealsv1.ExposureStatus{
+		Name: "admin", Class: "tcp", Shard: "tcp-0", Port: 30008,
+	})
+	shard := tcpShard("tcp-0")
+	m, c := newManager(s, tcpClass(0), &shard,
+		ownListenerSet(t, 30007, statusCondition("Conflicted", "True")),
+		ownedSet(t, "sample-admin", "admin", "tcp-0", 30008, statusCondition("Accepted", "True")))
+
+	_, _ = m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+
+	assert.NotEqualValues(t, 30007, exposurePort(t, c, "direct"))
+	assert.EqualValues(t, 30008, exposurePort(t, c, "admin"),
+		"a sibling's conflict is not a reason to move")
+}
+
+func TestReconcile_ShardLeavingThePoolMovesOnlyItsExposure(t *testing.T) {
+	s := settledSeal(0)
+	s.Spec.Expose = append(s.Spec.Expose, tcpExposure("admin", 9121))
+	zero := tcpShard("tcp-0")
+	gone := gatewayObj("tcp-1", "kgateway-system", nil)
+	m, c := newManager(s, tcpClass(0), &zero, &gone,
+		ownListenerSet(t, 30007),
+		ownedSet(t, "sample-admin", "admin", "tcp-1", 30008))
+
+	_, _ = m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+
+	admin, found := readSetNamed(t, c, "sample-admin")
+	require.True(t, found)
+	parent, _ := gatewayapi.ParentShard(admin)
+	assert.Equal(t, tcpRef("tcp-0"), parent, "admin's shard left the pool, so admin moves")
+	assert.EqualValues(t, 30007, exposurePort(t, c, "direct"), "direct's shard is still fine")
+}
+
+// Existing Seals have one set named after the Seal. They get new sets and new
+// ports.
+func TestReconcile_OldSealNamedSetIsReplaced(t *testing.T) {
+	s := settledSeal(0)
+	m, c := newManager(s, tcpClass(0), tcpShardWithAddress(t, "tcp-0", "172.19.0.200"),
+		ownedSet(t, "sample", "direct", "tcp-0", 30007), readyRoute(t, "direct"))
+
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"sample-direct"}, ownedSetNames(t, c), "the old Seal-named set must go")
+
+	port := ownListenerPort(t, c)
+	assert.NotEqualValues(t, 30007, port, "the old set still held 30007 while the new port was picked")
+	assert.Equal(t, port, readSeal(t, c).Status.Exposures[0].Port)
 }

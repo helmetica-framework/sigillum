@@ -45,7 +45,8 @@ func TestBuildTCPRoute_ParentsOnTheListenerSetSection(t *testing.T) {
 
 	p := parents[0].(map[string]any)
 	assert.Equal(t, "ListenerSet", p["kind"])
-	assert.Equal(t, "networkconfig", p["name"])
+	assert.Equal(t, "networkconfig-direct", p["name"],
+		"the route parents on the exposure's own ListenerSet, not a Seal-wide one")
 	assert.Equal(t, "direct", p["sectionName"])
 	assert.Equal(t, ListenerSetGVK.Group, p["group"])
 }

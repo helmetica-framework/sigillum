@@ -52,7 +52,7 @@ func BuildTCPRoute(
 			map[string]any{
 				"group":       ListenerSetGVK.Group,
 				"kind":        ListenerSetGVK.Kind,
-				"name":        sealName,
+				"name":        ListenerSetName(sealName, exposureName),
 				"sectionName": exposureName,
 			},
 		},
