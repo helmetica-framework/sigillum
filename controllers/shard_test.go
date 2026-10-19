@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
@@ -27,16 +27,11 @@ func tcpClass(maxPerShard int32) *sealsv1.ExposureClass {
 	return &c
 }
 
-func gatewayObj(name, namespace string, labels map[string]string) unstructured.Unstructured {
-	obj := gatewayapi.New(gatewayapi.GatewayGVK)
-	obj.SetName(name)
-	obj.SetNamespace(namespace)
-	obj.SetLabels(labels)
-
-	return *obj
+func gatewayObj(name, namespace string, labels map[string]string) gwv1.Gateway {
+	return gwv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: labels}}
 }
 
-func tcpShard(name string) unstructured.Unstructured {
+func tcpShard(name string) gwv1.Gateway {
 	return gatewayObj(name, "kgateway-system", map[string]string{shardPoolLabel: "tcp"})
 }
 
@@ -146,7 +141,7 @@ func TestListShards_EmptyCluster(t *testing.T) {
 }
 
 func TestShardCounts_CountsListenersPerShard(t *testing.T) {
-	sets := []unstructured.Unstructured{
+	sets := []gwv1.ListenerSet{
 		listenerSet(t, "a", "ns-a", "tcp-0", 30000, 30001),
 		listenerSet(t, "b", "ns-b", "tcp-1", 30002),
 	}
@@ -158,7 +153,7 @@ func TestShardCounts_CountsListenersPerShard(t *testing.T) {
 }
 
 func TestShardCounts_SumsSetsOnTheSameShard(t *testing.T) {
-	sets := []unstructured.Unstructured{
+	sets := []gwv1.ListenerSet{
 		listenerSet(t, "a", "ns-a", "tcp-0", 30000),
 		listenerSet(t, "b", "ns-b", "tcp-0", 30001, 30002),
 	}
@@ -167,14 +162,10 @@ func TestShardCounts_SumsSetsOnTheSameShard(t *testing.T) {
 }
 
 func TestShardCounts_ParentlessSetCountsNowhere(t *testing.T) {
-	obj := gatewayapi.New(gatewayapi.ListenerSetGVK)
-	obj.SetName("orphan")
-	obj.SetNamespace("ns")
-	require.NoError(t, unstructured.SetNestedSlice(obj.Object,
-		[]any{map[string]any{"name": "x", "protocol": "TCP", "port": int64(30007)}},
-		"spec", "listeners"))
+	obj := bareSet("orphan", "ns")
+	obj.Spec.Listeners = []gwv1.ListenerEntry{{Name: "x", Protocol: gwv1.TCPProtocolType, Port: 30007}}
 
-	assert.Empty(t, shardCounts([]unstructured.Unstructured{*obj}))
+	assert.Empty(t, shardCounts([]gwv1.ListenerSet{*obj}))
 }
 
 func TestShardCounts_EmptyInputIsAUsableMap(t *testing.T) {
@@ -208,9 +199,7 @@ func TestStickyShard_NoOwnListenerSet(t *testing.T) {
 }
 
 func TestStickyShard_OwnWithoutAParent(t *testing.T) {
-	obj := gatewayapi.New(gatewayapi.ListenerSetGVK)
-	obj.SetName("networkconfig")
-	obj.SetNamespace("redis-7f3")
+	obj := bareSet("networkconfig", "redis-7f3")
 
 	_, ok := stickyShard(obj, []gatewayapi.ShardRef{tcpRef("tcp-0")})
 
@@ -333,19 +322,11 @@ func TestEffectiveMax_ClampsANegativeValue(t *testing.T) {
 // would be a shard key no real Gateway matches, so these listeners would count
 // against nothing and the shard could overfill past the cap.
 func TestShardCounts_ParentWithoutANamespaceCountsOnTheLocalShard(t *testing.T) {
-	obj := gatewayapi.New(gatewayapi.ListenerSetGVK)
-	obj.SetName("a")
-	obj.SetNamespace("kgateway-system")
-	require.NoError(t, unstructured.SetNestedMap(obj.Object, map[string]any{
-		"parentRef": map[string]any{
-			"group": gatewayapi.GatewayGVK.Group,
-			"kind":  "Gateway",
-			"name":  "tcp-0",
-		},
-		"listeners": []any{map[string]any{"name": "d", "protocol": "TCP", "port": int64(30000)}},
-	}, "spec"))
+	obj := bareSet("a", "kgateway-system")
+	obj.Spec.ParentRef = gwv1.ParentGatewayReference{Name: "tcp-0"}
+	obj.Spec.Listeners = []gwv1.ListenerEntry{{Name: "d", Protocol: gwv1.TCPProtocolType, Port: 30000}}
 
-	counts := shardCounts([]unstructured.Unstructured{*obj})
+	counts := shardCounts([]gwv1.ListenerSet{*obj})
 
 	assert.Equal(t, 1, counts[tcpRef("tcp-0")])
 	assert.Zero(t, counts[gatewayapi.ShardRef{Name: "tcp-0"}],

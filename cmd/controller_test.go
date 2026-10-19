@@ -5,10 +5,9 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/runtime/schema"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
-	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 )
 
 func TestControllerCmd_LeaderElectionDefaultsToOn(t *testing.T) {
@@ -22,10 +21,8 @@ func TestControllerCmd_LeaderElectionDefaultsToOn(t *testing.T) {
 func TestNewScheme_KnowsTheGatewayKinds(t *testing.T) {
 	scheme := newScheme()
 
-	for _, gvk := range []schema.GroupVersionKind{
-		gatewayapi.ListenerSetGVK, gatewayapi.TCPRouteGVK,
-		gatewayapi.HTTPRouteGVK, gatewayapi.GatewayGVK,
-	} {
+	for _, kind := range []string{"ListenerSet", "TCPRoute", "HTTPRoute", "Gateway"} {
+		gvk := gwv1.SchemeGroupVersion.WithKind(kind)
 		assert.True(t, scheme.Recognizes(gvk), "scheme must recognise %s", gvk)
 	}
 }

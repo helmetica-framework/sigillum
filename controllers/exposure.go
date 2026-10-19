@@ -9,8 +9,9 @@ import (
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwac "sigs.k8s.io/gateway-api/applyconfiguration/apis/v1"
 )
 
 // exposureOutcome is one exposure's published status. Failed separates
@@ -51,7 +52,7 @@ func (r *SealManager) reconcileTCPRoutes(
 
 	// Build every route before applying any, so a bad exposure cannot leave
 	// half the routes applied.
-	var routes []*unstructured.Unstructured
+	var routes []*gwac.TCPRouteApplyConfiguration
 
 	for _, e := range exposures {
 		if e.Protocol != sealsv1.ProtocolTCP {
@@ -71,15 +72,15 @@ func (r *SealManager) reconcileTCPRoutes(
 	applied := map[string]bool{}
 
 	for _, route := range routes {
-		err = r.Apply(ctx, client.ApplyConfigurationFromUnstructured(route), fieldOwner, client.ForceOwnership)
+		err = r.Apply(ctx, route, fieldOwner, client.ForceOwnership)
 		if err != nil {
 			return fmt.Errorf("applying tcproute: %w", err)
 		}
 
-		applied[route.GetName()] = true
+		applied[*route.Name] = true
 	}
 
-	routeList := gatewayapi.NewList(gatewayapi.TCPRouteGVK)
+	routeList := &gwv1.TCPRouteList{}
 
 	err = r.List(ctx, routeList, &client.ListOptions{Namespace: seal.GetNamespace()})
 	if err != nil {
@@ -326,7 +327,7 @@ func (r *SealManager) reconcileExposures(
 	}
 
 	// Read live only when a port must be picked.
-	var sets []unstructured.Unstructured
+	var sets []gwv1.ListenerSet
 	if needPort {
 		sets, err = r.listAllListenerSets(ctx, true)
 		if err != nil {
@@ -427,7 +428,7 @@ func (r *SealManager) reconcileExposures(
 			continue
 		}
 
-		gw := gatewayapi.New(gatewayapi.GatewayGVK)
+		gw := &gwv1.Gateway{}
 		err := r.Get(ctx, client.ObjectKey{Namespace: w.Parent.Namespace, Name: w.Parent.Name}, gw)
 		if err != nil && !apierrors.IsNotFound(err) {
 			return fail(fmt.Errorf("getting gateway: %w", err))
@@ -440,7 +441,7 @@ func (r *SealManager) reconcileExposures(
 			continue
 		}
 
-		route := gatewayapi.New(gatewayapi.TCPRouteGVK)
+		route := &gwv1.TCPRoute{}
 		key := client.ObjectKey{Namespace: seal.GetNamespace(), Name: gatewayapi.RouteName(seal.GetName(), e.Name)}
 		err := r.Get(ctx, key, route)
 		if apierrors.IsNotFound(err) {
@@ -463,12 +464,12 @@ func (r *SealManager) reconcileExposures(
 // it, two exposures placed in the same pass would see the same free slot and
 // the same free port.
 type placer struct {
-	sets    []unstructured.Unstructured
+	sets    []gwv1.ListenerSet
 	counts  map[gatewayapi.ShardRef]int
 	claimed map[gatewayapi.ShardRef]map[int32]struct{}
 }
 
-func newPlacer(sets []unstructured.Unstructured) *placer {
+func newPlacer(sets []gwv1.ListenerSet) *placer {
 	return &placer{
 		sets:    sets,
 		counts:  shardCounts(sets),
@@ -478,7 +479,7 @@ func newPlacer(sets []unstructured.Unstructured) *placer {
 
 // takenOn is the set of ports in use on shard: every set's ports except own's
 // (unless conflicted), plus the ports claimed in this pass.
-func (p *placer) takenOn(shard gatewayapi.ShardRef, own *unstructured.Unstructured, conflicted map[string]struct{}) map[int32]struct{} {
+func (p *placer) takenOn(shard gatewayapi.ShardRef, own *gwv1.ListenerSet, conflicted map[string]struct{}) map[int32]struct{} {
 	taken := takenPortsWithConflicts(p.sets, shard, own, conflicted)
 
 	for port := range p.claimed[shard] {
@@ -525,7 +526,7 @@ func (r *SealManager) reconcileListenerSets(
 
 	// Build every set before applying any, so a bad port cannot leave half
 	// the sets applied.
-	sets := make([]*unstructured.Unstructured, 0, len(want))
+	sets := make([]*gwac.ListenerSetApplyConfiguration, 0, len(want))
 
 	for _, w := range want {
 		set, err := gatewayapi.BuildListenerSet(
@@ -545,12 +546,12 @@ func (r *SealManager) reconcileListenerSets(
 	applied := map[string]bool{}
 
 	for _, set := range sets {
-		err = r.Apply(ctx, client.ApplyConfigurationFromUnstructured(set), fieldOwner, client.ForceOwnership)
+		err = r.Apply(ctx, set, fieldOwner, client.ForceOwnership)
 		if err != nil {
-			return fmt.Errorf("applying listenerset %s: %w", set.GetName(), err)
+			return fmt.Errorf("applying listenerset %s: %w", *set.Name, err)
 		}
 
-		applied[set.GetName()] = true
+		applied[*set.Name] = true
 	}
 
 	kept := make(map[string]bool, len(keep))
@@ -577,8 +578,8 @@ func (r *SealManager) reconcileListenerSets(
 }
 
 // ownedSets picks the sets seal controls out of sets, keyed by name.
-func ownedSets(sets []unstructured.Unstructured, seal *sealsv1.Seal) map[string]*unstructured.Unstructured {
-	owned := map[string]*unstructured.Unstructured{}
+func ownedSets(sets []gwv1.ListenerSet, seal *sealsv1.Seal) map[string]*gwv1.ListenerSet {
+	owned := map[string]*gwv1.ListenerSet{}
 
 	for i := range sets {
 		if metav1.IsControlledBy(&sets[i], seal) {
@@ -591,8 +592,8 @@ func ownedSets(sets []unstructured.Unstructured, seal *sealsv1.Seal) map[string]
 
 // readOwnedSets lists the sets in the Seal's namespace and keeps the ones the
 // Seal controls, keyed by name.
-func readOwnedSets(ctx context.Context, reader client.Reader, seal *sealsv1.Seal) (map[string]*unstructured.Unstructured, error) {
-	list := gatewayapi.NewList(gatewayapi.ListenerSetGVK)
+func readOwnedSets(ctx context.Context, reader client.Reader, seal *sealsv1.Seal) (map[string]*gwv1.ListenerSet, error) {
+	list := &gwv1.ListenerSetList{}
 
 	err := reader.List(ctx, list, client.InNamespace(seal.GetNamespace()))
 	if err != nil {
@@ -603,12 +604,12 @@ func readOwnedSets(ctx context.Context, reader client.Reader, seal *sealsv1.Seal
 }
 
 // exposureSet picks the set of exposure out of own. Nil means none.
-func exposureSet(own map[string]*unstructured.Unstructured, seal *sealsv1.Seal, exposure string) *unstructured.Unstructured {
+func exposureSet(own map[string]*gwv1.ListenerSet, seal *sealsv1.Seal, exposure string) *gwv1.ListenerSet {
 	return own[gatewayapi.ListenerSetName(seal.GetName(), exposure)]
 }
 
 // hasConflict reports whether any listener on sets is Conflicted.
-func hasConflict(sets map[string]*unstructured.Unstructured) bool {
+func hasConflict(sets map[string]*gwv1.ListenerSet) bool {
 	for _, set := range sets {
 		for _, state := range gatewayapi.ListenerStates(set) {
 			if state == gatewayapi.ListenerConflicted {
@@ -621,7 +622,7 @@ func hasConflict(sets map[string]*unstructured.Unstructured) bool {
 }
 
 // listenerPort is the port of the listener named exposure on set.
-func listenerPort(set *unstructured.Unstructured, exposure string) (int32, bool) {
+func listenerPort(set *gwv1.ListenerSet, exposure string) (int32, bool) {
 	for _, l := range gatewayapi.Listeners(set) {
 		if l.Name == exposure {
 			return l.Port, true

@@ -10,10 +10,10 @@ import (
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
@@ -29,27 +29,26 @@ func tcpExposure(name string, port int32) sealsv1.Exposure {
 }
 
 // tcpRoute seeds a TCPRoute owned by the Seal carrying uid.
-func tcpRoute(name, namespace string, uid types.UID) unstructured.Unstructured {
-	obj := gatewayapi.New(gatewayapi.TCPRouteGVK)
-	obj.SetName(name)
-	obj.SetNamespace(namespace)
-	obj.SetOwnerReferences([]metav1.OwnerReference{{
-		APIVersion:         sealsv1.GroupVersion.String(),
-		Kind:               "Seal",
-		Name:               "whoever",
-		UID:                uid,
-		Controller:         ptr.To(true),
-		BlockOwnerDeletion: ptr.To(true),
-	}})
-
-	return *obj
+func tcpRoute(name, namespace string, uid types.UID) gwv1.TCPRoute {
+	return gwv1.TCPRoute{ObjectMeta: metav1.ObjectMeta{
+		Name:      name,
+		Namespace: namespace,
+		OwnerReferences: []metav1.OwnerReference{{
+			APIVersion:         sealsv1.GroupVersion.String(),
+			Kind:               "Seal",
+			Name:               "whoever",
+			UID:                uid,
+			Controller:         ptr.To(true),
+			BlockOwnerDeletion: ptr.To(true),
+		}},
+	}}
 }
 
 // routeNames lists every TCPRoute name in namespace, sorted.
 func routeNames(t *testing.T, c client.Client, namespace string) []string {
 	t.Helper()
 
-	list := gatewayapi.NewList(gatewayapi.TCPRouteGVK)
+	list := &gwv1.TCPRouteList{}
 	require.NoError(t, c.List(context.Background(), list, client.InNamespace(namespace)))
 
 	names := make([]string, 0, len(list.Items))
@@ -63,10 +62,10 @@ func routeNames(t *testing.T, c client.Client, namespace string) []string {
 
 // readTCPRoute fetches one TCPRoute by name. The second result is false when
 // there is none.
-func readTCPRoute(t *testing.T, c client.Client, name, namespace string) (*unstructured.Unstructured, bool) {
+func readTCPRoute(t *testing.T, c client.Client, name, namespace string) (*gwv1.TCPRoute, bool) {
 	t.Helper()
 
-	obj := gatewayapi.New(gatewayapi.TCPRouteGVK)
+	obj := &gwv1.TCPRoute{}
 	err := c.Get(context.Background(), client.ObjectKey{Name: name, Namespace: namespace}, obj)
 	if apierrors.IsNotFound(err) {
 		return nil, false
@@ -100,18 +99,12 @@ func TestReconcileTCPRoutes_CarriesTheExposureBackend(t *testing.T) {
 	obj, found := readTCPRoute(t, c, "sample-direct", "default")
 	require.True(t, found)
 
-	rules, found, err := unstructured.NestedSlice(obj.Object, "spec", "rules")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, rules, 1)
+	require.Len(t, obj.Spec.Rules, 1)
+	require.Len(t, obj.Spec.Rules[0].BackendRefs, 1)
 
-	refs, ok := rules[0].(map[string]any)["backendRefs"].([]any)
-	require.True(t, ok)
-	require.Len(t, refs, 1)
-
-	b := refs[0].(map[string]any)
-	assert.Equal(t, "redis", b["name"])
-	assert.Equal(t, int64(6379), b["port"])
+	b := obj.Spec.Rules[0].BackendRefs[0]
+	assert.EqualValues(t, "redis", b.Name)
+	assert.EqualValues(t, 6379, *b.Port)
 }
 
 // The section name is what binds the route to one listener. Without it the
@@ -127,15 +120,12 @@ func TestReconcileTCPRoutes_BindsToTheExposuresListener(t *testing.T) {
 	obj, found := readTCPRoute(t, c, "sample-direct", "default")
 	require.True(t, found)
 
-	parents, found, err := unstructured.NestedSlice(obj.Object, "spec", "parentRefs")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, parents, 1)
+	require.Len(t, obj.Spec.ParentRefs, 1)
 
-	p := parents[0].(map[string]any)
-	assert.Equal(t, "ListenerSet", p["kind"])
-	assert.Equal(t, "sample-direct", p["name"])
-	assert.Equal(t, "direct", p["sectionName"])
+	p := obj.Spec.ParentRefs[0]
+	assert.EqualValues(t, "ListenerSet", *p.Kind)
+	assert.EqualValues(t, "sample-direct", p.Name)
+	assert.EqualValues(t, "direct", *p.SectionName)
 }
 
 func TestReconcileTCPRoutes_SetsTheControllerOwnerReference(t *testing.T) {
@@ -231,9 +221,7 @@ func TestReconcileTCPRoutes_LeavesAnotherSealsRouteAlone(t *testing.T) {
 // controller's business.
 func TestReconcileTCPRoutes_LeavesAnUnownedRouteAlone(t *testing.T) {
 	s := seal(1)
-	orphan := *gatewayapi.New(gatewayapi.TCPRouteGVK)
-	orphan.SetName("handmade")
-	orphan.SetNamespace("default")
+	orphan := gwv1.TCPRoute{ObjectMeta: metav1.ObjectMeta{Name: "handmade", Namespace: "default"}}
 	m, c := newManager(s, &orphan)
 
 	err := m.reconcileTCPRoutes(context.Background(), s, nil)
@@ -469,10 +457,10 @@ func TestRollUp_WaitingDoesNotHideAFailedPolicy(t *testing.T) {
 
 // readSetNamed fetches the ListenerSet name in the default namespace. The
 // second result is false when there is none.
-func readSetNamed(t *testing.T, c client.Client, name string) (*unstructured.Unstructured, bool) {
+func readSetNamed(t *testing.T, c client.Client, name string) (*gwv1.ListenerSet, bool) {
 	t.Helper()
 
-	obj := gatewayapi.New(gatewayapi.ListenerSetGVK)
+	obj := &gwv1.ListenerSet{}
 	err := c.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: name}, obj)
 	if apierrors.IsNotFound(err) {
 		return nil, false
@@ -487,7 +475,7 @@ func readSetNamed(t *testing.T, c client.Client, name string) (*unstructured.Uns
 func ownedSetNames(t *testing.T, c client.Client) []string {
 	t.Helper()
 
-	list := gatewayapi.NewList(gatewayapi.ListenerSetGVK)
+	list := &gwv1.ListenerSetList{}
 	require.NoError(t, c.List(context.Background(), list, client.InNamespace("default")))
 
 	names := []string{}
@@ -510,7 +498,7 @@ func want(exposure, shard string, port int32) wantSet {
 }
 
 // directSet is the set of exposure "direct" on tcp-0.
-func directSet(t *testing.T, port int64, conds ...any) *unstructured.Unstructured {
+func directSet(t *testing.T, port int64, conds ...metav1.Condition) *gwv1.ListenerSet {
 	t.Helper()
 
 	return ownedSet(t, "sample-direct", "direct", "tcp-0", port, conds...)
@@ -715,7 +703,7 @@ func TestOwnedSets_KeepsOnlyTheSealsSets(t *testing.T) {
 	mine := directSet(t, 30007)
 	other := listenerSet(t, "handmade", "default", "tcp-0", 30009)
 
-	got := ownedSets([]unstructured.Unstructured{*mine, other}, seal(1))
+	got := ownedSets([]gwv1.ListenerSet{*mine, other}, seal(1))
 
 	require.Len(t, got, 1)
 	assert.Contains(t, got, "sample-direct")
@@ -765,7 +753,7 @@ func TestListenerPort_OtherNameOrNoSet(t *testing.T) {
 }
 
 func TestNewPlacer_CountsListenersPerShard(t *testing.T) {
-	sets := []unstructured.Unstructured{
+	sets := []gwv1.ListenerSet{
 		listenerSet(t, "a", "ns", "tcp-0", 30000, 30001),
 		listenerSet(t, "b", "ns", "tcp-1", 30002),
 	}
@@ -785,7 +773,7 @@ func TestNewPlacer_NoSets(t *testing.T) {
 }
 
 func TestPlacerTakenOn_HoldsOtherSetsPortsOnTheShard(t *testing.T) {
-	sets := []unstructured.Unstructured{
+	sets := []gwv1.ListenerSet{
 		listenerSet(t, "a", "ns", "tcp-0", 30000),
 		listenerSet(t, "b", "ns", "tcp-1", 30001),
 	}
@@ -799,14 +787,14 @@ func TestPlacerTakenOn_HoldsOtherSetsPortsOnTheShard(t *testing.T) {
 // its own old port.
 func TestPlacerTakenOn_FreesTheOwnPort(t *testing.T) {
 	own := directSet(t, 30007)
-	p := newPlacer([]unstructured.Unstructured{*own})
+	p := newPlacer([]gwv1.ListenerSet{*own})
 
 	assert.Empty(t, p.takenOn(tcpRef("tcp-0"), own, nil))
 }
 
 func TestPlacerTakenOn_KeepsAConflictedOwnPort(t *testing.T) {
 	own := directSet(t, 30007)
-	p := newPlacer([]unstructured.Unstructured{*own})
+	p := newPlacer([]gwv1.ListenerSet{*own})
 
 	taken := p.takenOn(tcpRef("tcp-0"), own, map[string]struct{}{"direct": {}})
 
@@ -816,7 +804,7 @@ func TestPlacerTakenOn_KeepsAConflictedOwnPort(t *testing.T) {
 func TestPlacerTakenOn_SiblingPortsAreTaken(t *testing.T) {
 	own := directSet(t, 30007)
 	sibling := ownedSet(t, "sample-admin", "admin", "tcp-0", 30008)
-	p := newPlacer([]unstructured.Unstructured{*own, *sibling})
+	p := newPlacer([]gwv1.ListenerSet{*own, *sibling})
 
 	taken := p.takenOn(tcpRef("tcp-0"), own, nil)
 
@@ -844,7 +832,7 @@ func TestPlacerClaim_AMoveCountsAListener(t *testing.T) {
 
 func TestPlacerClaim_AStickyExposureDoesNotCountTwice(t *testing.T) {
 	own := directSet(t, 30007)
-	p := newPlacer([]unstructured.Unstructured{*own})
+	p := newPlacer([]gwv1.ListenerSet{*own})
 
 	p.claim(tcpRef("tcp-0"), 30007, false)
 

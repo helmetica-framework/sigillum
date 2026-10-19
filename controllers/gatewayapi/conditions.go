@@ -1,42 +1,24 @@
 package gatewayapi
 
-import "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-// findCurrentCondition finds condType in a raw status condition list.
+// currentCondition finds condType in conds.
 //
 // A condition older than generation was written for a spec that no longer
-// exists, so it is treated as missing. A condition with no observedGeneration
-// is taken as current.
-func findCurrentCondition(conditions []any, condType string, generation int64) (map[string]any, bool) {
-	for _, raw := range conditions {
-		c, ok := raw.(map[string]any)
-		if !ok {
+// exists, so it is treated as missing. An observedGeneration of 0 means it was
+// not set, and the condition is taken as current.
+func currentCondition(conds []metav1.Condition, condType string, generation int64) (metav1.Condition, bool) {
+	for _, c := range conds {
+		if c.Type != condType {
 			continue
 		}
 
-		t, _, _ := unstructured.NestedString(c, "type")
-		if t != condType {
-			continue
-		}
-
-		observed, found, _ := unstructured.NestedInt64(c, "observedGeneration")
-		if found && observed < generation {
+		if c.ObservedGeneration != 0 && c.ObservedGeneration < generation {
 			continue
 		}
 
 		return c, true
 	}
 
-	return nil, false
-}
-
-// currentCondition is findCurrentCondition, returning only the status.
-func currentCondition(conditions []any, condType string, generation int64) (string, bool) {
-	c, found := findCurrentCondition(conditions, condType, generation)
-	if !found {
-		return "", false
-	}
-
-	status, _, _ := unstructured.NestedString(c, "status")
-	return status, true
+	return metav1.Condition{}, false
 }

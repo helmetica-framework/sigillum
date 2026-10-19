@@ -5,10 +5,9 @@ import (
 	"fmt"
 	"math/rand/v2"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
 	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 // maxConflictMoves is how many times in a row one exposure is moved off a
@@ -29,9 +28,9 @@ const (
 // own listeners whose names are in conflicted stay taken. Handing one of those
 // back would reproduce the conflict the gateway controller just reported.
 func takenPortsWithConflicts(
-	sets []unstructured.Unstructured,
+	sets []gwv1.ListenerSet,
 	shard gatewayapi.ShardRef,
-	own *unstructured.Unstructured,
+	own *gwv1.ListenerSet,
 	conflicted map[string]struct{},
 ) map[int32]struct{} {
 	taken := map[int32]struct{}{}
@@ -103,8 +102,8 @@ func allocatePort(rng sealsv1.PortRange, taken map[int32]struct{}, rnd *rand.Ran
 // The caller passes live only when an exposure actually needs a new port. A
 // settled Seal allocates nothing, and an uncached cluster-wide List on every
 // reconcile of every Seal does not scale.
-func (r *SealManager) listAllListenerSets(ctx context.Context, live bool) ([]unstructured.Unstructured, error) {
-	list := gatewayapi.NewList(gatewayapi.ListenerSetGVK)
+func (r *SealManager) listAllListenerSets(ctx context.Context, live bool) ([]gwv1.ListenerSet, error) {
+	list := &gwv1.ListenerSetList{}
 
 	if live {
 		err := r.APIReader.List(ctx, list)

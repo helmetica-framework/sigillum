@@ -4,7 +4,9 @@ import (
 	"fmt"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwac "sigs.k8s.io/gateway-api/applyconfiguration/apis/v1"
 )
 
 // maxPort is the highest port number there is.
@@ -47,26 +49,20 @@ const (
 	ListenerOK
 )
 
-// BuildListenerSet renders the one ListenerSet a Seal owns, parented to a shard
-// Gateway.
+// BuildListenerSet renders a ListenerSet parented to a shard Gateway.
 //
-// A nil object with no error means there is nothing to write: spec.listeners
-// requires at least one entry, so a Seal with no TCP exposures has no valid
-// ListenerSet and the caller deletes the object instead.
+// A nil result with no error means there is nothing to write: spec.listeners
+// requires at least one entry, so the caller deletes the object instead.
 //
 // An error means the caller passed something that cannot be written. That is a
 // bug in the caller, not a cluster state to reconcile, so it is never a nil
-// object: the caller must not read it as "delete".
-//
-// Taking []Listener rather than raw maps is deliberate: every number written
-// into an unstructured object has to be int64, and an int32 that slips through
-// panics later, on conversion, far from the code that wrote it.
+// result: the caller must not read it as "delete".
 func BuildListenerSet(
 	name, namespace string,
 	parent ShardRef,
 	listeners []Listener,
-	owner metav1.OwnerReference,
-) (*unstructured.Unstructured, error) {
+	owner *metav1ac.OwnerReferenceApplyConfiguration,
+) (*gwac.ListenerSetApplyConfiguration, error) {
 	if len(listeners) == 0 {
 		return nil, nil
 	}
@@ -77,7 +73,7 @@ func BuildListenerSet(
 		return nil, fmt.Errorf("listenerset %s/%s: parent shard has no name", namespace, name)
 	}
 
-	entries := make([]any, 0, len(listeners))
+	entries := make([]*gwac.ListenerEntryApplyConfiguration, 0, len(listeners))
 
 	for _, l := range listeners {
 		if l.Port < 1 || l.Port > maxPort {
@@ -85,110 +81,68 @@ func BuildListenerSet(
 				namespace, name, l.Name, l.Port, maxPort)
 		}
 
-		entries = append(entries, map[string]any{
-			"name":     l.Name,
-			"protocol": l.Protocol,
-			"port":     int64(l.Port),
-			"allowedRoutes": map[string]any{
-				"namespaces": map[string]any{
-					"from": "Same",
-				},
-			},
-		})
+		entries = append(entries, gwac.ListenerEntry().
+			WithName(gwv1.SectionName(l.Name)).
+			WithProtocol(gwv1.ProtocolType(l.Protocol)).
+			WithPort(l.Port).
+			WithAllowedRoutes(gwac.AllowedRoutes().
+				WithNamespaces(gwac.RouteNamespaces().WithFrom(gwv1.NamespacesFromSame))))
 	}
 
-	obj := New(ListenerSetGVK)
-	obj.SetName(name)
-	obj.SetNamespace(namespace)
-	obj.SetOwnerReferences([]metav1.OwnerReference{owner})
-
-	obj.Object["spec"] = map[string]any{
-		"parentRef": map[string]any{
-			"group":     group,
-			"kind":      "Gateway",
-			"name":      parent.Name,
-			"namespace": parent.Namespace,
-		},
-		"listeners": entries,
-	}
-
-	return obj, nil
+	return gwac.ListenerSet(name, namespace).
+		WithOwnerReferences(owner).
+		WithSpec(gwac.ListenerSetSpec().
+			WithParentRef(gwac.ParentGatewayReference().
+				WithGroup(gwv1.GroupName).
+				WithKind("Gateway").
+				WithName(gwv1.ObjectName(parent.Name)).
+				WithNamespace(gwv1.Namespace(parent.Namespace))).
+			WithListeners(entries...)), nil
 }
 
 // ParentShard reads spec.parentRef off a ListenerSet. The second result is
 // false when the object carries no usable parent.
-func ParentShard(obj *unstructured.Unstructured) (ShardRef, bool) {
-	if obj == nil {
-		return ShardRef{}, false
-	}
-
-	ref, found, err := unstructured.NestedMap(obj.Object, "spec", "parentRef")
-	if !found || err != nil {
-		return ShardRef{}, false
-	}
-
-	name, _, _ := unstructured.NestedString(ref, "name")
-	namespace, _, _ := unstructured.NestedString(ref, "namespace")
-
+func ParentShard(ls *gwv1.ListenerSet) (ShardRef, bool) {
 	// A parentless set must not silently count against some shard.
-	if name == "" {
+	if ls == nil || ls.Spec.ParentRef.Name == "" {
 		return ShardRef{}, false
 	}
 
 	// Gateway API reads an omitted namespace as the object's own. Leaving it
 	// empty would build a shard key no real Gateway matches, so the set's
 	// listeners would count against nothing.
-	if namespace == "" {
-		namespace = obj.GetNamespace()
+	namespace := ls.Namespace
+	if ns := ls.Spec.ParentRef.Namespace; ns != nil && *ns != "" {
+		namespace = string(*ns)
 	}
 
-	return ShardRef{
-		Name:      name,
-		Namespace: namespace,
-	}, true
+	return ShardRef{Name: string(ls.Spec.ParentRef.Name), Namespace: namespace}, true
 }
 
 // Listeners reads spec.listeners off a ListenerSet.
 //
-// A malformed entry is skipped rather than fatal. This list is the source of
-// truth for port allocation, and one bad object written by hand must not stop
-// every other Seal from being reconciled.
-func Listeners(obj *unstructured.Unstructured) []Listener {
-	if obj == nil {
+// A port outside 1..maxPort is skipped. It cannot be a real claim, and the
+// builder never writes one.
+func Listeners(ls *gwv1.ListenerSet) []Listener {
+	if ls == nil {
 		return nil
 	}
 
-	listeners, found, err := unstructured.NestedSlice(obj.Object, "spec", "listeners")
-	if !found || err != nil {
-		return nil
-	}
+	listeners := []Listener{}
 
-	allocated := []Listener{}
-
-	for _, raw := range listeners {
-		entry, ok := raw.(map[string]any)
-		if !ok {
+	for _, l := range ls.Spec.Listeners {
+		if l.Port < 1 || l.Port > maxPort {
 			continue
 		}
 
-		port, found, err := unstructured.NestedInt64(entry, "port")
-		if !found || err != nil || port < 1 || port > maxPort {
-			continue
-		}
-
-		// A missing name or protocol is not fatal. The port is what
-		// allocation reads.
-		name, _, _ := unstructured.NestedString(entry, "name")
-		protocol, _, _ := unstructured.NestedString(entry, "protocol")
-
-		allocated = append(allocated, Listener{
-			Name:     name,
-			Protocol: protocol,
-			Port:     int32(port),
+		listeners = append(listeners, Listener{
+			Name:     string(l.Name),
+			Protocol: string(l.Protocol),
+			Port:     int32(l.Port),
 		})
 	}
 
-	return allocated
+	return listeners
 }
 
 // ListenerStates reads status.listeners off a ListenerSet, keyed by listener
@@ -197,31 +151,22 @@ func Listeners(obj *unstructured.Unstructured) []Listener {
 // Only conditions for the object's current generation count. Right after a
 // listener moves to a new port, the status still describes the old one, and
 // reading that as a fresh conflict would move it again.
-func ListenerStates(obj *unstructured.Unstructured) map[string]ListenerState {
+func ListenerStates(ls *gwv1.ListenerSet) map[string]ListenerState {
 	state := map[string]ListenerState{}
 
-	if obj == nil {
+	if ls == nil {
 		return state
 	}
 
-	listeners, _, _ := unstructured.NestedSlice(obj.Object, "status", "listeners")
-	generation := obj.GetGeneration()
-
-	for _, raw := range listeners {
-		entry, ok := raw.(map[string]any)
-		if !ok {
+	for _, l := range ls.Status.Listeners {
+		if l.Name == "" {
 			continue
 		}
 
-		name, _, _ := unstructured.NestedString(entry, "name")
-		if name == "" {
-			continue
-		}
+		name := string(l.Name)
 
-		conditions, _, _ := unstructured.NestedSlice(entry, "conditions")
-
-		if status, found := currentCondition(conditions, "Conflicted", generation); found {
-			if status == "True" {
+		if c, found := currentCondition(l.Conditions, string(gwv1.ListenerEntryConditionConflicted), ls.Generation); found {
+			if c.Status == metav1.ConditionTrue {
 				state[name] = ListenerConflicted
 			} else {
 				state[name] = ListenerOK
@@ -229,7 +174,7 @@ func ListenerStates(obj *unstructured.Unstructured) map[string]ListenerState {
 			continue
 		}
 
-		if status, found := currentCondition(conditions, "Accepted", generation); found && status == "True" {
+		if c, found := currentCondition(l.Conditions, string(gwv1.ListenerEntryConditionAccepted), ls.Generation); found && c.Status == metav1.ConditionTrue {
 			state[name] = ListenerOK
 			continue
 		}

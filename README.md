@@ -83,5 +83,5 @@ platform must provide:
 | `api/v1` | The `Seal` and `ExposureClass` types (`seals.helmetica.io/v1`): spec, status and generated deepcopy code. |
 | `cmd` | The `sigillum` CLI (cobra): `root.go` wires the binary, `controller.go` is the `sigillum controller` subcommand that builds the manager and registers `SealManager`. |
 | `controllers` | `SealManager`, the reconciler for `Seal`. `desiredPhase` writes the `NetworkPolicy`; `ingressPeers` decides who gets in. |
-| `controllers/gatewayapi` | Builders and status readers for the Gateway API objects (ListenerSet, TCPRoute, Gateway). The only place their field names are spelled. |
+| `controllers/gatewayapi` | Builders and status readers for the Gateway API objects (ListenerSet, TCPRoute, Gateway), on top of the upstream `sigs.k8s.io/gateway-api` types. |
 | `config` | Kustomize tree: `crd` (the CRD manifests, installed separately), `rbac`, `manager`, `default` (RBAC + manager, no CRDs) and `samples`. |

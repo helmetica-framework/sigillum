@@ -7,7 +7,9 @@ import (
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwac "sigs.k8s.io/gateway-api/applyconfiguration/apis/v1"
 )
 
 // maxNameLength is the longest name a Kubernetes object can carry.
@@ -24,15 +26,15 @@ type Backend struct {
 
 // BuildTCPRoute renders a TCPRoute binding one listener to one backend service.
 //
-// The parent is the ListenerSet, not the Gateway, with sectionName set to the
-// listener name, so the route binds to exactly one port.
+// The parent is the exposure's ListenerSet, not the Gateway, with sectionName
+// set to the listener name, so the route binds to exactly one port.
 //
 // It errors rather than writing a route the gateway controller would reject.
 func BuildTCPRoute(
 	sealName, namespace, exposureName string,
 	backend Backend,
-	owner metav1.OwnerReference,
-) (*unstructured.Unstructured, error) {
+	owner *metav1ac.OwnerReferenceApplyConfiguration,
+) (*gwac.TCPRouteApplyConfiguration, error) {
 	if backend.Service == "" {
 		return nil, fmt.Errorf("exposure %q: backend service is empty", exposureName)
 	}
@@ -42,33 +44,18 @@ func BuildTCPRoute(
 			exposureName, backend.Port, maxPort)
 	}
 
-	route := New(TCPRouteGVK)
-	route.SetName(RouteName(sealName, exposureName))
-	route.SetNamespace(namespace)
-	route.SetOwnerReferences([]metav1.OwnerReference{owner})
-
-	route.Object["spec"] = map[string]any{
-		"parentRefs": []any{
-			map[string]any{
-				"group":       ListenerSetGVK.Group,
-				"kind":        ListenerSetGVK.Kind,
-				"name":        ListenerSetName(sealName, exposureName),
-				"sectionName": exposureName,
-			},
-		},
-		"rules": []any{
-			map[string]any{
-				"backendRefs": []any{
-					map[string]any{
-						"name": backend.Service,
-						"port": int64(backend.Port),
-					},
-				},
-			},
-		},
-	}
-
-	return route, nil
+	return gwac.TCPRoute(RouteName(sealName, exposureName), namespace).
+		WithOwnerReferences(owner).
+		WithSpec(gwac.TCPRouteSpec().
+			WithParentRefs(gwac.ParentReference().
+				WithGroup(gwv1.GroupName).
+				WithKind("ListenerSet").
+				WithName(gwv1.ObjectName(ListenerSetName(sealName, exposureName))).
+				WithSectionName(gwv1.SectionName(exposureName))).
+			WithRules(gwac.TCPRouteRule().
+				WithBackendRefs(gwac.BackendRef().
+					WithName(gwv1.ObjectName(backend.Service)).
+					WithPort(backend.Port)))), nil
 }
 
 // RouteName is the name of the TCPRoute for one exposure.
@@ -92,40 +79,30 @@ func RouteName(sealName, exposureName string) string {
 // RouteIsReady reports whether the gateway controller both accepted the route
 // and resolved its backend. When not, it returns the route's own condition
 // message, so the user sees what the gateway controller said.
-func RouteIsReady(obj *unstructured.Unstructured) (bool, string) {
+func RouteIsReady(route *gwv1.TCPRoute) (bool, string) {
 	const notSeen = "waiting for the gateway controller to accept the route"
 
-	if obj == nil {
+	if route == nil {
 		return false, notSeen
 	}
 
-	parents, _, _ := unstructured.NestedSlice(obj.Object, "status", "parents")
-
 	msg := ""
-	for _, rawp := range parents {
-		p, ok := rawp.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		conds, _, _ := unstructured.NestedSlice(p, "conditions")
-
+	for _, p := range route.Status.Parents {
 		ready := true
-		for _, condType := range []string{"Accepted", "ResolvedRefs"} {
-			c, found := findCurrentCondition(conds, condType, obj.GetGeneration())
+		for _, condType := range []gwv1.RouteConditionType{gwv1.RouteConditionAccepted, gwv1.RouteConditionResolvedRefs} {
+			c, found := currentCondition(p.Conditions, string(condType), route.Generation)
 			if !found {
 				ready = false
 				continue
 			}
 
-			status, _, _ := unstructured.NestedString(c, "status")
-			if status == "True" {
+			if c.Status == metav1.ConditionTrue {
 				continue
 			}
 
 			ready = false
 			if msg == "" {
-				msg, _, _ = unstructured.NestedString(c, "message")
+				msg = c.Message
 			}
 		}
 

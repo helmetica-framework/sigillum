@@ -13,7 +13,6 @@ import (
 	netv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/managedfields"
@@ -25,6 +24,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwac "sigs.k8s.io/gateway-api/applyconfiguration"
 
 	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
 	sealsac "github.com/helmetica-framework/sigillum/applyconfiguration"
@@ -88,7 +89,9 @@ func newManagerInNamespace(ns *corev1.Namespace, objs ...client.Object) (*SealMa
 	scheme := newTestScheme()
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithStatusSubresource(&sealsv1.Seal{}).
+		// The gateway CRDs have a status subresource too. Without it, the fake
+		// client lets an apply to the main object wipe their status.
+		WithStatusSubresource(&sealsv1.Seal{}, &gwv1.ListenerSet{}, &gwv1.TCPRoute{}, &gwv1.Gateway{}).
 		WithIndex(&sealsv1.Seal{}, exposureClassIndex, exposureClassIndexKeys).
 		// Seal applies are checked against the generated schema. Anything the
 		// generated converter does not know falls through to the deduced one,
@@ -102,6 +105,7 @@ func newManagerInNamespace(ns *corev1.Namespace, objs ...client.Object) (*SealMa
 		// has no status subresource there.
 		WithTypeConverters(
 			sealsac.NewTypeConverter(scheme),
+			gwac.NewTypeConverter(scheme),
 			managedfields.NewDeducedTypeConverter(),
 		).
 		// Apply is the write path under test, so the field manager it records
@@ -809,43 +813,45 @@ func exposableTCPClass() *sealsv1.ExposureClass {
 }
 
 // tcpShardWithAddress is tcpShard after the gateway controller gave it addr.
-func tcpShardWithAddress(t *testing.T, name, addr string) *unstructured.Unstructured {
+func tcpShardWithAddress(t *testing.T, name, addr string) *gwv1.Gateway {
 	t.Helper()
 
-	obj := tcpShard(name)
-	require.NoError(t, unstructured.SetNestedSlice(obj.Object, []any{
-		map[string]any{"type": "IPAddress", "value": addr},
-	}, "status", "addresses"))
+	gw := tcpShard(name)
+	gw.Status.Addresses = []gwv1.GatewayStatusAddress{{Type: ptr.To(gwv1.IPAddressType), Value: addr}}
 
-	return &obj
+	return &gw
 }
 
 // statusCondition is one current condition as the gateway controller writes
 // it. No observedGeneration means it counts for any generation.
-func statusCondition(condType, status string) map[string]any {
-	return map[string]any{"type": condType, "status": status, "message": condType + " is " + status}
+func statusCondition(condType, status string) metav1.Condition {
+	return metav1.Condition{
+		Type:    condType,
+		Status:  metav1.ConditionStatus(status),
+		Message: condType + " is " + status,
+	}
 }
 
 // readyRoute is the Seal's TCPRoute for exposure, already accepted and
 // resolved by the gateway controller.
-func readyRoute(t *testing.T, exposure string) *unstructured.Unstructured {
+func readyRoute(t *testing.T, exposure string) *gwv1.TCPRoute {
 	t.Helper()
 
-	obj := tcpRoute("sample-"+exposure, "default", sealUID)
-	require.NoError(t, unstructured.SetNestedSlice(obj.Object, []any{
-		map[string]any{
-			"conditions": []any{
-				statusCondition("Accepted", "True"),
-				statusCondition("ResolvedRefs", "True"),
-			},
+	route := tcpRoute("sample-"+exposure, "default", sealUID)
+	route.Status.Parents = []gwv1.RouteParentStatus{{
+		ParentRef:      gwv1.ParentReference{Name: gwv1.ObjectName("sample-" + exposure)},
+		ControllerName: "kgateway.dev/kgateway",
+		Conditions: []metav1.Condition{
+			statusCondition("Accepted", "True"),
+			statusCondition("ResolvedRefs", "True"),
 		},
-	}, "status", "parents"))
+	}}
 
-	return &obj
+	return &route
 }
 
 // ownListenerSet is the set of exposure "direct" on tcp-0.
-func ownListenerSet(t *testing.T, port int64, conds ...any) *unstructured.Unstructured {
+func ownListenerSet(t *testing.T, port int64, conds ...metav1.Condition) *gwv1.ListenerSet {
 	t.Helper()
 
 	return ownedSet(t, "sample-direct", "direct", "tcp-0", port, conds...)
@@ -854,31 +860,25 @@ func ownListenerSet(t *testing.T, port int64, conds ...any) *unstructured.Unstru
 // ownedSet is a ListenerSet called name that the test Seal controls, parented
 // to shard, with one listener called listener on port. conds is the gateway
 // controller's verdict on that listener.
-func ownedSet(t *testing.T, name, listener, shard string, port int64, conds ...any) *unstructured.Unstructured {
+func ownedSet(t *testing.T, name, listener, shard string, port int64, conds ...metav1.Condition) *gwv1.ListenerSet {
 	t.Helper()
 
-	obj := listenerSet(t, name, "default", shard, port)
-	obj.SetOwnerReferences([]metav1.OwnerReference{{
+	ls := listenerSet(t, name, "default", shard, port)
+	ls.OwnerReferences = []metav1.OwnerReference{{
 		APIVersion:         sealsv1.GroupVersion.String(),
 		Kind:               "Seal",
 		Name:               "sample",
 		UID:                sealUID,
 		Controller:         ptr.To(true),
 		BlockOwnerDeletion: ptr.To(true),
-	}})
-
-	listeners, _, err := unstructured.NestedSlice(obj.Object, "spec", "listeners")
-	require.NoError(t, err)
-	listeners[0].(map[string]any)["name"] = listener
-	require.NoError(t, unstructured.SetNestedSlice(obj.Object, listeners, "spec", "listeners"))
+	}}
+	ls.Spec.Listeners[0].Name = gwv1.SectionName(listener)
 
 	if len(conds) > 0 {
-		require.NoError(t, unstructured.SetNestedSlice(obj.Object, []any{
-			map[string]any{"name": listener, "conditions": conds},
-		}, "status", "listeners"))
+		ls.Status.Listeners = []gwv1.ListenerEntryStatus{{Name: gwv1.SectionName(listener), Conditions: conds}}
 	}
 
-	return &obj
+	return &ls
 }
 
 // exposurePort reads the port on the ListenerSet of exposure.
@@ -1231,17 +1231,15 @@ func poolClass(name, pool string, maxPerShard int32) *sealsv1.ExposureClass {
 
 // poolShard is a shard Gateway in pool. An empty addr means the gateway
 // controller has not given it one yet.
-func poolShard(t *testing.T, name, pool, addr string) *unstructured.Unstructured {
+func poolShard(t *testing.T, name, pool, addr string) *gwv1.Gateway {
 	t.Helper()
 
-	obj := gatewayObj(name, "kgateway-system", map[string]string{shardPoolLabel: pool})
+	gw := gatewayObj(name, "kgateway-system", map[string]string{shardPoolLabel: pool})
 	if addr != "" {
-		require.NoError(t, unstructured.SetNestedSlice(obj.Object, []any{
-			map[string]any{"type": "IPAddress", "value": addr},
-		}, "status", "addresses"))
+		gw.Status.Addresses = []gwv1.GatewayStatusAddress{{Type: ptr.To(gwv1.IPAddressType), Value: addr}}
 	}
 
-	return &obj
+	return &gw
 }
 
 func exposureOn(name, className string, port int32) sealsv1.Exposure {

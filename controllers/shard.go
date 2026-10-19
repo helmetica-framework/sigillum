@@ -7,11 +7,11 @@ import (
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 // apiListenerLimit is the Gateway API's own cap on listeners per ListenerSet.
@@ -40,7 +40,7 @@ func (r *SealManager) listShards(ctx context.Context, class *sealsv1.ExposureCla
 		return nil, fmt.Errorf("parsing shard selector: %w", err)
 	}
 
-	list := gatewayapi.NewList(gatewayapi.GatewayGVK)
+	list := &gwv1.GatewayList{}
 	err = r.List(ctx, list, client.MatchingLabelsSelector{Selector: selector})
 	if err != nil {
 		return nil, fmt.Errorf("listing gateways: %w", err)
@@ -74,7 +74,7 @@ func sortShards(shards []gatewayapi.ShardRef) {
 }
 
 // shardCounts counts the listeners each shard is already allocating.
-func shardCounts(sets []unstructured.Unstructured) map[gatewayapi.ShardRef]int {
+func shardCounts(sets []gwv1.ListenerSet) map[gatewayapi.ShardRef]int {
 	counts := map[gatewayapi.ShardRef]int{}
 
 	for i := range sets {
@@ -92,7 +92,7 @@ func shardCounts(sets []unstructured.Unstructured) map[gatewayapi.ShardRef]int {
 //
 // A false result means the exposure moves and its address changes. The new
 // address is reported in status.exposures[] and nowhere else.
-func stickyShard(own *unstructured.Unstructured, shards []gatewayapi.ShardRef) (gatewayapi.ShardRef, bool) {
+func stickyShard(own *gwv1.ListenerSet, shards []gatewayapi.ShardRef) (gatewayapi.ShardRef, bool) {
 	parent, usable := gatewayapi.ParentShard(own)
 	if !usable {
 		return gatewayapi.ShardRef{}, false

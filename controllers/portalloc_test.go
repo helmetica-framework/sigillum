@@ -8,15 +8,17 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 )
 
 // takenPorts collects every listener port already claimed on shard.
-func takenPorts(sets []unstructured.Unstructured, shard gatewayapi.ShardRef, own *unstructured.Unstructured) map[int32]struct{} {
+func takenPorts(sets []gwv1.ListenerSet, shard gatewayapi.ShardRef, own *gwv1.ListenerSet) map[int32]struct{} {
 	return takenPortsWithConflicts(sets, shard, own, nil)
 }
 
@@ -26,32 +28,34 @@ func shard(name string) gatewayapi.ShardRef {
 
 // listenerSet builds a ListenerSet parented to shardName, with one listener
 // per port named after its index.
-func listenerSet(t *testing.T, name, namespace, shardName string, ports ...int64) unstructured.Unstructured {
+func listenerSet(t *testing.T, name, namespace, shardName string, ports ...int64) gwv1.ListenerSet {
 	t.Helper()
 
-	listeners := make([]any, 0, len(ports))
+	ls := gwv1.ListenerSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec: gwv1.ListenerSetSpec{
+			ParentRef: gwv1.ParentGatewayReference{
+				Group:     ptr.To(gwv1.Group(gwv1.GroupName)),
+				Kind:      ptr.To(gwv1.Kind("Gateway")),
+				Name:      gwv1.ObjectName(shardName),
+				Namespace: ptr.To(gwv1.Namespace("kgateway-system")),
+			},
+		},
+	}
 	for i, p := range ports {
-		listeners = append(listeners, map[string]any{
-			"name":     string(rune('a' + i)),
-			"protocol": "TCP",
-			"port":     p,
+		ls.Spec.Listeners = append(ls.Spec.Listeners, gwv1.ListenerEntry{
+			Name:     gwv1.SectionName(string(rune('a' + i))),
+			Protocol: gwv1.TCPProtocolType,
+			Port:     gwv1.PortNumber(p),
 		})
 	}
 
-	obj := gatewayapi.New(gatewayapi.ListenerSetGVK)
-	obj.SetName(name)
-	obj.SetNamespace(namespace)
-	require.NoError(t, unstructured.SetNestedMap(obj.Object, map[string]any{
-		"parentRef": map[string]any{
-			"group":     gatewayapi.GatewayGVK.Group,
-			"kind":      "Gateway",
-			"name":      shardName,
-			"namespace": "kgateway-system",
-		},
-		"listeners": listeners,
-	}, "spec"))
+	return ls
+}
 
-	return *obj
+// bareSet is a ListenerSet with no parent and no listeners.
+func bareSet(name, namespace string) *gwv1.ListenerSet {
+	return &gwv1.ListenerSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}}
 }
 
 func portRange() sealsv1.PortRange { return sealsv1.PortRange{From: 30000, To: 30255} }
@@ -59,7 +63,7 @@ func portRange() sealsv1.PortRange { return sealsv1.PortRange{From: 30000, To: 3
 func seeded() *rand.Rand { return rand.New(rand.NewPCG(1, 42)) }
 
 func TestTakenPorts_CollectsPortsOnTheShard(t *testing.T) {
-	sets := []unstructured.Unstructured{
+	sets := []gwv1.ListenerSet{
 		listenerSet(t, "a", "ns-a", "tcp-0", 30000, 30001),
 		listenerSet(t, "b", "ns-b", "tcp-0", 30002),
 	}
@@ -75,7 +79,7 @@ func TestTakenPorts_CollectsPortsOnTheShard(t *testing.T) {
 // Each shard Gateway has its own IP, so the same port on two shards is not a
 // clash. Treating ports as cluster-wide would waste most of the range.
 func TestTakenPorts_IgnoresOtherShards(t *testing.T) {
-	sets := []unstructured.Unstructured{
+	sets := []gwv1.ListenerSet{
 		listenerSet(t, "a", "ns-a", "tcp-0", 30000),
 		listenerSet(t, "b", "ns-b", "tcp-1", 30001),
 	}
@@ -88,7 +92,7 @@ func TestTakenPorts_IgnoresOtherShards(t *testing.T) {
 
 func TestTakenPorts_SkipsOurOwnListenerSet(t *testing.T) {
 	own := listenerSet(t, "networkconfig", "redis-7f3", "tcp-0", 30007)
-	sets := []unstructured.Unstructured{own, listenerSet(t, "b", "ns-b", "tcp-0", 30008)}
+	sets := []gwv1.ListenerSet{own, listenerSet(t, "b", "ns-b", "tcp-0", 30008)}
 
 	taken := takenPorts(sets, shard("tcp-0"), &own)
 
@@ -99,7 +103,7 @@ func TestTakenPorts_SkipsOurOwnListenerSet(t *testing.T) {
 // The caller's copy of own comes out of a List, so it is a different object
 // from the entry in sets. Matching on pointer identity would never fire.
 func TestTakenPorts_MatchesOwnByNameAndNamespace(t *testing.T) {
-	sets := []unstructured.Unstructured{listenerSet(t, "networkconfig", "redis-7f3", "tcp-0", 30007)}
+	sets := []gwv1.ListenerSet{listenerSet(t, "networkconfig", "redis-7f3", "tcp-0", 30007)}
 	separateCopy := listenerSet(t, "networkconfig", "redis-7f3", "tcp-0", 30007)
 
 	taken := takenPorts(sets, shard("tcp-0"), &separateCopy)
@@ -108,7 +112,7 @@ func TestTakenPorts_MatchesOwnByNameAndNamespace(t *testing.T) {
 }
 
 func TestTakenPorts_ASameNamedSetInAnotherNamespaceIsNotOurs(t *testing.T) {
-	sets := []unstructured.Unstructured{listenerSet(t, "networkconfig", "other-ns", "tcp-0", 30007)}
+	sets := []gwv1.ListenerSet{listenerSet(t, "networkconfig", "other-ns", "tcp-0", 30007)}
 	own := listenerSet(t, "networkconfig", "redis-7f3", "tcp-0")
 
 	taken := takenPorts(sets, shard("tcp-0"), &own)
@@ -124,24 +128,18 @@ func TestTakenPorts_NoListenerSets(t *testing.T) {
 }
 
 func TestTakenPorts_ListenerSetWithoutListenersDoesNotPanic(t *testing.T) {
-	obj := gatewayapi.New(gatewayapi.ListenerSetGVK)
-	obj.SetName("empty")
-	obj.SetNamespace("ns")
+	obj := bareSet("empty", "ns")
 
 	assert.NotPanics(t, func() {
-		takenPorts([]unstructured.Unstructured{*obj}, shard("tcp-0"), nil)
+		takenPorts([]gwv1.ListenerSet{*obj}, shard("tcp-0"), nil)
 	})
 }
 
 func TestTakenPorts_ParentlessSetCountsAgainstNoShard(t *testing.T) {
-	obj := gatewayapi.New(gatewayapi.ListenerSetGVK)
-	obj.SetName("orphan")
-	obj.SetNamespace("ns")
-	require.NoError(t, unstructured.SetNestedSlice(obj.Object,
-		[]any{map[string]any{"name": "x", "protocol": "TCP", "port": int64(30007)}},
-		"spec", "listeners"))
+	obj := bareSet("orphan", "ns")
+	obj.Spec.Listeners = []gwv1.ListenerEntry{{Name: "x", Protocol: gwv1.TCPProtocolType, Port: 30007}}
 
-	taken := takenPorts([]unstructured.Unstructured{*obj}, shard("tcp-0"), nil)
+	taken := takenPorts([]gwv1.ListenerSet{*obj}, shard("tcp-0"), nil)
 
 	assert.Empty(t, taken)
 }
@@ -153,7 +151,7 @@ func TestTakenPortsWithConflicts_ConflictedPortStaysTaken(t *testing.T) {
 	own := listenerSet(t, "networkconfig", "redis-7f3", "tcp-0", 30007, 30008)
 
 	taken := takenPortsWithConflicts(
-		[]unstructured.Unstructured{own}, shard("tcp-0"), &own,
+		[]gwv1.ListenerSet{own}, shard("tcp-0"), &own,
 		map[string]struct{}{"a": {}}, // listener "a" holds 30007
 	)
 
@@ -163,7 +161,7 @@ func TestTakenPortsWithConflicts_ConflictedPortStaysTaken(t *testing.T) {
 
 func TestTakenPortsWithConflicts_NoConflictsMatchesTakenPorts(t *testing.T) {
 	own := listenerSet(t, "networkconfig", "redis-7f3", "tcp-0", 30007)
-	sets := []unstructured.Unstructured{own, listenerSet(t, "b", "ns-b", "tcp-0", 30008)}
+	sets := []gwv1.ListenerSet{own, listenerSet(t, "b", "ns-b", "tcp-0", 30008)}
 
 	assert.Equal(t,
 		takenPorts(sets, shard("tcp-0"), &own),
