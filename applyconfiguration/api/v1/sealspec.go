@@ -15,6 +15,11 @@ type SealSpecApplyConfiguration struct {
 	// effectively disabling the NetworkPolicy. It overrides AllowedNamespaces
 	// and the claim namespace. Traffic from outside the cluster stays blocked.
 	AllowAllNamespaces *bool `json:"allowAllNamespaces,omitempty"`
+	// Expose asks for ways into this namespace from outside the cluster.
+	//
+	// listType=map makes the API server reject duplicate names and makes
+	// server-side apply merge per entry rather than replacing the whole list.
+	Expose []ExposureApplyConfiguration `json:"expose,omitempty"`
 }
 
 // SealSpecApplyConfiguration constructs a declarative configuration of the SealSpec type for use with
@@ -38,5 +43,18 @@ func (b *SealSpecApplyConfiguration) WithAllowedNamespaces(values ...string) *Se
 // If called multiple times, the AllowAllNamespaces field is set to the value of the last call.
 func (b *SealSpecApplyConfiguration) WithAllowAllNamespaces(value bool) *SealSpecApplyConfiguration {
 	b.AllowAllNamespaces = &value
+	return b
+}
+
+// WithExpose adds the given value to the Expose field in the declarative configuration
+// and returns the receiver, so that objects can be build by chaining "With" function invocations.
+// If called multiple times, values provided by each call will be appended to the Expose field.
+func (b *SealSpecApplyConfiguration) WithExpose(values ...*ExposureApplyConfiguration) *SealSpecApplyConfiguration {
+	for i := range values {
+		if values[i] == nil {
+			panic("nil value passed to WithExpose")
+		}
+		b.Expose = append(b.Expose, *values[i])
+	}
 	return b
 }
