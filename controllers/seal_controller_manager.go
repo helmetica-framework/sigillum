@@ -438,6 +438,7 @@ func (r *SealManager) SetupWithManager(ctx context.Context, name string, mgr ctr
 		Owns(&netv1.NetworkPolicy{}).
 		Owns(gatewayapi.New(gatewayapi.ListenerSetGVK)).
 		Owns(gatewayapi.New(gatewayapi.TCPRouteGVK)).
+		Owns(gatewayapi.New(gatewayapi.GatewayGVK)).
 		Watches(&sealsv1.ExposureClass{}, handler.EnqueueRequestsFromMapFunc(r.sealsForClass)).
 		WithOptions(sealControllerOptions()).
 		Complete(r)
