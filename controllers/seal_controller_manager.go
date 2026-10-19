@@ -177,7 +177,9 @@ func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (pha
 	err := r.Get(ctx, client.ObjectKeyFromObject(instanceNS), instanceNS)
 	if err != nil {
 		errf := fmt.Errorf("getting namespace: %w", err)
-		return phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}, errf
+		// Keep the last exposures: an apply without them wipes their ports and
+		// conflict counts.
+		return phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error(), Exposures: seal.Status.Exposures}, errf
 	}
 
 	var (
@@ -189,7 +191,7 @@ func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (pha
 		classes := &sealsv1.ExposureClassList{}
 		if err := r.List(ctx, classes); err != nil {
 			errf := fmt.Errorf("listing exposure classes: %w", err)
-			return phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}, errf
+			return phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error(), Exposures: seal.Status.Exposures}, errf
 		}
 
 		outcomes, xerr = r.reconcileExposures(ctx, seal, classes.Items)
@@ -204,11 +206,12 @@ func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (pha
 			return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseFailed, Message: err.Error()}),
 				errors.Join(xerr, err)
 		}
-	} else if len(seal.Status.Exposures) > 0 {
-		// The last exposure was removed: its listener and routes have to go.
+	} else {
+		// Remove whatever listeners and routes are left. This follows the
+		// objects, not status.exposures, so a status that lost its list cannot
+		// leak ports.
 		if _, err := r.reconcileExposures(ctx, seal, nil); err != nil {
-			// Keep the old exposures in status, or the next pass skips the
-			// cleanup.
+			// Keep the old exposures in status until the cleanup is done.
 			return phase{
 				Phase:     sealsv1.SealPhaseFailed,
 				Message:   err.Error(),

@@ -1360,3 +1360,98 @@ func TestReconcile_OldSealNamedSetIsReplaced(t *testing.T) {
 	assert.NotEqualValues(t, 30007, port, "the old set still held 30007 while the new port was picked")
 	assert.Equal(t, port, readSeal(t, c).Status.Exposures[0].Port)
 }
+
+// classListFails is a client whose ExposureClass list fails.
+type classListFails struct{ client.Client }
+
+func (c classListFails) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*sealsv1.ExposureClassList); ok {
+		return errors.New("api server unavailable")
+	}
+
+	return c.Client.List(ctx, list, opts...)
+}
+
+// ownedExposureStatus runs one pass that moves a conflicted port, so sigillum
+// owns a status with a port and a conflict count of 1, as on a real cluster.
+// Fixture status is owned by nobody, and an apply never removes it.
+func ownedExposureStatus(t *testing.T, objs ...client.Object) (*SealManager, client.Client, []sealsv1.ExposureStatus) {
+	t.Helper()
+
+	s := seal(1)
+	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379)}
+	shard := tcpShard("tcp-0")
+	objs = append(objs, s, tcpClass(0), &shard,
+		ownListenerSet(t, 30007, statusCondition("Conflicted", "True")))
+	m, c := newManager(objs...)
+
+	_, _ = m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	before := readSeal(t, c).Status.Exposures
+	require.Len(t, before, 1)
+	require.EqualValues(t, 1, before[0].ConflictCount)
+
+	return m, c, before
+}
+
+// A wiped list resets the conflict count, so the move limit could be bypassed.
+func TestReconcile_NamespaceErrorKeepsTheExposures(t *testing.T) {
+	m, c, before := ownedExposureStatus(t)
+	ctx := context.Background()
+	require.NoError(t, c.Delete(ctx, namespace(nil)))
+
+	_, err := m.Reconcile(ctx, ctrl.Request{NamespacedName: sealKey()})
+	require.Error(t, err)
+
+	got := readSeal(t, c)
+	assert.Equal(t, sealsv1.SealPhaseFailed, got.Status.Phase)
+	assert.Equal(t, before, got.Status.Exposures, "a short error must not wipe ports or conflict counts")
+}
+
+func TestReconcile_ClassListErrorKeepsTheExposures(t *testing.T) {
+	m, c, before := ownedExposureStatus(t)
+	m.Client = classListFails{c}
+
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	require.Error(t, err)
+
+	got := readSeal(t, c)
+	assert.Equal(t, sealsv1.SealPhaseFailed, got.Status.Phase)
+	assert.Equal(t, before, got.Status.Exposures, "a short error must not wipe ports or conflict counts")
+}
+
+// Cleanup follows the objects, not the status. A status that lost its list
+// must not leak the sets, or their ports stay taken forever.
+func TestReconcile_EmptyExposeCleansUpWithoutAStatusList(t *testing.T) {
+	s := seal(1)
+	m, c := newManager(s, ownListenerSet(t, 30007), readyRoute(t, "direct"))
+
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err)
+
+	assert.Empty(t, ownedSetNames(t, c))
+	_, found := readTCPRoute(t, c, "sample-direct", "default")
+	assert.False(t, found)
+	assert.Nil(t, readSeal(t, c).Status.Exposures)
+}
+
+// The bug end to end: expose is emptied, the same pass fails early, and the
+// next pass must still clean up.
+func TestReconcile_EmptiedExposeAfterAShortErrorStillCleansUp(t *testing.T) {
+	m, c, _ := ownedExposureStatus(t)
+	ctx := context.Background()
+
+	emptied := readSeal(t, c)
+	emptied.Spec.Expose = nil
+	require.NoError(t, c.Update(ctx, emptied))
+	require.NoError(t, c.Delete(ctx, namespace(nil)))
+
+	_, err := m.Reconcile(ctx, ctrl.Request{NamespacedName: sealKey()})
+	require.Error(t, err, "the namespace is missing")
+
+	require.NoError(t, c.Create(ctx, namespace(nil)))
+	_, err = m.Reconcile(ctx, ctrl.Request{NamespacedName: sealKey()})
+	require.NoError(t, err)
+
+	assert.Empty(t, ownedSetNames(t, c), "the sets must go, or their ports stay taken")
+	assert.Nil(t, readSeal(t, c).Status.Exposures)
+}
