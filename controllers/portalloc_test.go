@@ -15,6 +15,11 @@ import (
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 )
 
+// takenPorts collects every listener port already claimed on shard.
+func takenPorts(sets []unstructured.Unstructured, shard gatewayapi.ShardRef, own *unstructured.Unstructured) map[int32]struct{} {
+	return takenPortsWithConflicts(sets, shard, own, nil)
+}
+
 func shard(name string) gatewayapi.ShardRef {
 	return gatewayapi.ShardRef{Name: name, Namespace: "kgateway-system"}
 }

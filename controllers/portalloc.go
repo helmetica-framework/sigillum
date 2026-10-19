@@ -25,11 +25,6 @@ const (
 	giveUp
 )
 
-// takenPorts collects every listener port already claimed on shard.
-func takenPorts(sets []unstructured.Unstructured, shard gatewayapi.ShardRef, own *unstructured.Unstructured) map[int32]struct{} {
-	return takenPortsWithConflicts(sets, shard, own, nil)
-}
-
 // takenPortsWithConflicts is takenPorts with one exception: ports held by our
 // own listeners whose names are in conflicted stay taken. Handing one of those
 // back would reproduce the conflict the gateway controller just reported.
