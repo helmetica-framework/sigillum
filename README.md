@@ -63,9 +63,11 @@ spec:
         port: 6379
 ```
 
-There is no port field. Sigillum picks a free port from the class's
-`portRange`, adds a listener for it to a shard Gateway and routes it to the
-backend. The result shows up in `status.exposures[]`:
+There is no port field: for each exposure, sigillum picks a shard Gateway
+with room and a free port from the class's `portRange`, and writes a
+ListenerSet and a TCPRoute named `<seal>-<exposure>`. Each exposure is placed
+on its own, so exposures of one Seal can land on different shards, and each
+one's shard, address, port and URL show up in `status.exposures[]`.
 
 Sigillum never creates Gateways. Before an exposure can be ready, the
 platform must provide:
