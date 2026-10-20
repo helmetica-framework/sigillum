@@ -2,7 +2,7 @@ module github.com/helmetica-framework/sigillum
 
 go 1.27
 
-toolchain go1.27.2
+toolchain go1.27.3
 
 require (
 	github.com/go-logr/logr v1.4.4
