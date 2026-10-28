@@ -54,7 +54,13 @@ type SealManager struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 	Log      logr.Logger
+
+	// NoGatewayAPI is set when the cluster has no Gateway API CRDs. Exposures
+	// then fail and no gateway objects are watched or written.
+	NoGatewayAPI bool
 }
+
+var errNoGatewayAPI = errors.New("gateway api is not installed in this cluster")
 
 type phase struct {
 	Phase     sealsv1.SealPhase
@@ -194,6 +200,11 @@ func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (pha
 			return phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error(), Exposures: seal.Status.Exposures}, errf
 		}
 
+		if r.NoGatewayAPI {
+			outcomes = noGatewayAPIOutcomes(seal.Spec.Expose)
+			return r.applyPolicy(ctx, seal, instanceNS, nil, outcomes)
+		}
+
 		outcomes, xerr = r.reconcileExposures(ctx, seal, classes.Items)
 
 		selectors, err = gatewaySelectors(classes.Items, seal.Spec.Expose)
@@ -206,7 +217,7 @@ func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (pha
 			return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseFailed, Message: err.Error()}),
 				errors.Join(xerr, err)
 		}
-	} else {
+	} else if !r.NoGatewayAPI {
 		// Remove whatever listeners and routes are left. This follows the
 		// objects, not status.exposures, so a status that lost its list cannot
 		// leak ports.
@@ -220,16 +231,39 @@ func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (pha
 		}
 	}
 
+	p, err := r.applyPolicy(ctx, seal, instanceNS, selectors, outcomes)
+	return p, errors.Join(xerr, err)
+}
+
+func noGatewayAPIOutcomes(exposures []sealsv1.Exposure) []exposureOutcome {
+	outcomes := make([]exposureOutcome, len(exposures))
+	for i, e := range exposures {
+		outcomes[i] = exposureOutcome{
+			Status: sealsv1.ExposureStatus{Name: e.Name, Message: errNoGatewayAPI.Error()},
+			Failed: true,
+		}
+	}
+	return outcomes
+}
+
+// applyPolicy writes the seal's NetworkPolicy and rolls outcomes into the
+// resulting phase.
+func (r *SealManager) applyPolicy(
+	ctx context.Context,
+	seal *sealsv1.Seal,
+	instanceNS *corev1.Namespace,
+	selectors []sealsv1.GatewaySelector,
+	outcomes []exposureOutcome,
+) (phase, error) {
 	peers, provision := ingressPeers(seal, instanceNS, selectors)
 	if !provision {
-		return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseReady, Message: "empty config, skipping provisioning"}), xerr
+		return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseReady, Message: "empty config, skipping provisioning"}), nil
 	}
 
 	owner, err := controllerRef(seal, r.Scheme)
 	if err != nil {
 		errf := fmt.Errorf("building owner reference: %w", err)
-		return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}),
-			errors.Join(xerr, errf)
+		return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}), errf
 	}
 
 	np := netv1ac.NetworkPolicy(policyName, seal.GetNamespace()).
@@ -243,11 +277,10 @@ func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (pha
 
 	if err := r.Apply(ctx, np, fieldOwner, client.ForceOwnership); err != nil {
 		errf := fmt.Errorf("reconciling network policy: %w", err)
-		return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}),
-			errors.Join(xerr, errf)
+		return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}), errf
 	}
 
-	return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseReady, Message: "networkpolicy applied"}), xerr
+	return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseReady, Message: "networkpolicy applied"}), nil
 }
 
 // controllerRef builds the seal's controller owner reference.
@@ -419,14 +452,18 @@ func (r *SealManager) SetupWithManager(ctx context.Context, name string, mgr ctr
 		return err
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		Named(name).
 		For(&sealsv1.Seal{}).
 		Owns(&netv1.NetworkPolicy{}).
-		Owns(&gwv1.ListenerSet{}).
-		Owns(&gwv1.TCPRoute{}).
-		Owns(&gwv1.Gateway{}).
 		Watches(&sealsv1.ExposureClass{}, handler.EnqueueRequestsFromMapFunc(r.sealsForClass)).
-		WithOptions(sealControllerOptions()).
-		Complete(r)
+		WithOptions(sealControllerOptions())
+
+	if !r.NoGatewayAPI {
+		b = b.Owns(&gwv1.ListenerSet{}).
+			Owns(&gwv1.TCPRoute{}).
+			Owns(&gwv1.Gateway{})
+	}
+
+	return b.Complete(r)
 }
