@@ -152,6 +152,14 @@ func runController(cmd *cobra.Command, _ []string) error {
 
 	lifetimeCtx := cmd.Context()
 
+	hasGatewayAPI, err := gatewayapi.Installed(mgr.GetRESTMapper())
+	if err != nil {
+		return fmt.Errorf("checking for gateway api: %w", err)
+	}
+	if !hasGatewayAPI {
+		cmd.Println("Gateway API CRDs not found, exposures are disabled. Restart sigillum after installing them.")
+	}
+
 	sm := controllers.SealManager{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
@@ -159,6 +167,8 @@ func runController(cmd *cobra.Command, _ []string) error {
 		Log:       mgr.GetLogger().WithName("seal-controller"),
 		APIReader: mgr.GetAPIReader(),
 		Rand:      rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
+
+		NoGatewayAPI: !hasGatewayAPI,
 	}
 
 	if err := sm.SetupWithManager(lifetimeCtx, "seal", mgr); err != nil {
