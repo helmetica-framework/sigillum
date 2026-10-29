@@ -62,3 +62,8 @@ run: manifests generate fmt vet
 # Clean up the generated resources
 clean:
     rm -rf contrib/completion dist/ cover.out cover.tmp.out {{ bin_filename }} || true
+
+# Bump direct dependencies to their latest version, then run the tests
+bump: && test
+    go get $(go list -m -f '{{{{if not (or .Indirect .Main)}}{{{{.Path}}@latest{{{{end}}' all)
+    go mod tidy
