@@ -1,4 +1,4 @@
-# The backend the sample Seal exposes.
+# The backend the sample NetworkConfig exposes.
 apiVersion: v1
 kind: Service
 metadata:

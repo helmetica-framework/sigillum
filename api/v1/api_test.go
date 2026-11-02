@@ -15,26 +15,26 @@ func TestSchemeRegistration(t *testing.T) {
 	scheme := runtime.NewScheme()
 	require.NoError(t, AddToScheme(scheme))
 
-	assert.True(t, scheme.Recognizes(GroupVersion.WithKind("Seal")))
-	assert.True(t, scheme.Recognizes(GroupVersion.WithKind("SealList")))
-	assert.Equal(t, "seals.helmetica.io", GroupVersion.Group)
+	assert.True(t, scheme.Recognizes(GroupVersion.WithKind("NetworkConfig")))
+	assert.True(t, scheme.Recognizes(GroupVersion.WithKind("NetworkConfigList")))
+	assert.Equal(t, "sigillum.helmetica.io", GroupVersion.Group)
 	assert.Equal(t, "v1", GroupVersion.Version)
 }
 
-func TestSealDeepCopy(t *testing.T) {
-	orig := &Seal{
+func TestNetworkConfigDeepCopy(t *testing.T) {
+	orig := &NetworkConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "sample",
 			Namespace:  "default",
 			Generation: 3,
 			Labels:     map[string]string{"key": "value"},
 		},
-		Spec: SealSpec{
+		Spec: NetworkConfigSpec{
 			AllowedNamespaces:  []string{"some-value"},
 			AllowAllNamespaces: ptr.To(true),
 		},
-		Status: SealStatus{
-			Phase:              SealPhaseReady,
+		Status: NetworkConfigStatus{
+			Phase:              NetworkConfigPhaseReady,
 			ObservedGeneration: 3,
 		},
 	}
@@ -54,12 +54,12 @@ func TestSealDeepCopy(t *testing.T) {
 		"deepcopy must not share the allowAllNamespaces pointer")
 }
 
-func TestSealListDeepCopy(t *testing.T) {
-	orig := &SealList{
-		Items: []Seal{
+func TestNetworkConfigListDeepCopy(t *testing.T) {
+	orig := &NetworkConfigList{
+		Items: []NetworkConfig{
 			{
 				ObjectMeta: metav1.ObjectMeta{Name: "one"},
-				Spec:       SealSpec{AllowedNamespaces: []string{"a"}},
+				Spec:       NetworkConfigSpec{AllowedNamespaces: []string{"a"}},
 			},
 		},
 	}
@@ -80,10 +80,10 @@ func TestExposureClassSchemeRegistration(t *testing.T) {
 	assert.True(t, scheme.Recognizes(GroupVersion.WithKind("ExposureClassList")))
 }
 
-func sealWithExposures() *Seal {
-	return &Seal{
+func networkConfigWithExposures() *NetworkConfig {
+	return &NetworkConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: "networkconfig", Namespace: "redis-7f3"},
-		Spec: SealSpec{
+		Spec: NetworkConfigSpec{
 			AllowedNamespaces: []string{"orders"},
 			Expose: []Exposure{
 				{
@@ -99,8 +99,8 @@ func sealWithExposures() *Seal {
 				},
 			},
 		},
-		Status: SealStatus{
-			Phase: SealPhaseReady,
+		Status: NetworkConfigStatus{
+			Phase: NetworkConfigPhaseReady,
 			Exposures: []ExposureStatus{
 				{Name: "api", Class: "public", Ready: true, Hostname: "redis-7f3.apps.example.com"},
 				{Name: "direct", Class: "tcp", Ready: true, Shard: "tcp-0", Address: "172.19.0.200", Port: 30007},
@@ -109,8 +109,8 @@ func sealWithExposures() *Seal {
 	}
 }
 
-func TestSealWithExposuresDeepCopy(t *testing.T) {
-	orig := sealWithExposures()
+func TestNetworkConfigWithExposuresDeepCopy(t *testing.T) {
+	orig := networkConfigWithExposures()
 
 	cp := orig.DeepCopy()
 	require.Equal(t, orig, cp)
@@ -124,8 +124,8 @@ func TestSealWithExposuresDeepCopy(t *testing.T) {
 		"deepcopy must not share the exposures slice")
 }
 
-func TestSealNilExposuresDeepCopyStaysNil(t *testing.T) {
-	orig := &Seal{ObjectMeta: metav1.ObjectMeta{Name: "s", Namespace: "n"}}
+func TestNetworkConfigNilExposuresDeepCopyStaysNil(t *testing.T) {
+	orig := &NetworkConfig{ObjectMeta: metav1.ObjectMeta{Name: "s", Namespace: "n"}}
 
 	cp := orig.DeepCopy()
 

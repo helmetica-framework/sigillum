@@ -6,12 +6,12 @@ metadata:
     rbac.authorization.k8s.io/aggregate-to-admin: "true"
 rules:
 - apiGroups:
-  - seals.helmetica.io
+  - sigillum.helmetica.io
   resources:
-  - seals
+  - networkconfigs
   verbs: [create, delete, get, list, patch, update, watch]
 - apiGroups:
-  - seals.helmetica.io
+  - sigillum.helmetica.io
   resources:
-  - seals/status
+  - networkconfigs/status
   verbs: [get]

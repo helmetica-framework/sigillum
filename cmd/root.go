@@ -7,8 +7,8 @@ import (
 
 var RootCmd = &cobra.Command{
 	Use:   "sigillum",
-	Short: "sigillum manages seals.",
-	Long:  "sigillum manages seals.",
+	Short: "sigillum manages network configs.",
+	Long:  "sigillum manages network configs.",
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		cmd.SilenceUsage = true
 	},

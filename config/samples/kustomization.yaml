@@ -2,6 +2,6 @@
 resources:
 - v1_gateway_shard.yaml
 - v1_exposureclass_tcp.yaml
-- v1_seal.yaml
+- v1_networkconfig.yaml
 - backend.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

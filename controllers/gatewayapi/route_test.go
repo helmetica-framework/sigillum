@@ -20,7 +20,7 @@ func redisBackend() Backend {
 func builtRoute(t *testing.T) *gwac.TCPRouteApplyConfiguration {
 	t.Helper()
 
-	ac, err := BuildTCPRoute("networkconfig", "redis-7f3", "direct", redisBackend(), sealOwner())
+	ac, err := BuildTCPRoute("networkconfig", "redis-7f3", "direct", redisBackend(), networkConfigOwner())
 	require.NoError(t, err)
 	require.NotNil(t, ac)
 
@@ -45,7 +45,7 @@ func TestBuildTCPRoute_ParentsOnTheListenerSetSection(t *testing.T) {
 	p := ac.Spec.ParentRefs[0]
 	assert.EqualValues(t, "ListenerSet", *p.Kind)
 	assert.EqualValues(t, "networkconfig-direct", *p.Name,
-		"the route parents on the exposure's own ListenerSet, not a Seal-wide one")
+		"the route parents on the exposure's own ListenerSet, not a NetworkConfig-wide one")
 	assert.EqualValues(t, "direct", *p.SectionName)
 	assert.EqualValues(t, "gateway.networking.k8s.io", *p.Group)
 }
@@ -60,18 +60,18 @@ func TestBuildTCPRoute_SendsTrafficToTheBackend(t *testing.T) {
 	assert.EqualValues(t, 6379, *b.Port)
 }
 
-func TestBuildTCPRoute_IsOwnedByTheSeal(t *testing.T) {
+func TestBuildTCPRoute_IsOwnedByTheNetworkConfig(t *testing.T) {
 	ac := builtRoute(t)
 
 	require.Len(t, ac.OwnerReferences, 1)
 	ref := ac.OwnerReferences[0]
-	assert.Equal(t, "Seal", *ref.Kind)
+	assert.Equal(t, "NetworkConfig", *ref.Kind)
 	assert.True(t, *ref.Controller)
-	assert.True(t, *ref.BlockOwnerDeletion, "the route must go when the Seal goes")
+	assert.True(t, *ref.BlockOwnerDeletion, "the route must go when the NetworkConfig goes")
 }
 
 func TestBuildTCPRoute_EmptyServiceIsAnError(t *testing.T) {
-	ac, err := BuildTCPRoute("networkconfig", "redis-7f3", "direct", Backend{Port: 6379}, sealOwner())
+	ac, err := BuildTCPRoute("networkconfig", "redis-7f3", "direct", Backend{Port: 6379}, networkConfigOwner())
 
 	require.Error(t, err)
 	assert.Nil(t, ac)
@@ -81,14 +81,14 @@ func TestBuildTCPRoute_EmptyServiceIsAnError(t *testing.T) {
 func TestBuildTCPRoute_PortOutsideTheRangeIsAnError(t *testing.T) {
 	for _, port := range []int32{0, -1, 70000} {
 		ac, err := BuildTCPRoute("networkconfig", "redis-7f3", "direct",
-			Backend{Service: "redis", Port: port}, sealOwner())
+			Backend{Service: "redis", Port: port}, networkConfigOwner())
 
 		require.Error(t, err, "port %d", port)
 		assert.Nil(t, ac, "port %d", port)
 	}
 }
 
-func TestRouteName_JoinsSealAndExposure(t *testing.T) {
+func TestRouteName_JoinsNetworkConfigAndExposure(t *testing.T) {
 	assert.Equal(t, "networkconfig-direct", RouteName("networkconfig", "direct"))
 }
 
@@ -208,8 +208,8 @@ func TestRouteIsReady_NilIsNotReady(t *testing.T) {
 }
 
 func TestRouteName_TruncatedNameIsAValidSubdomain(t *testing.T) {
-	for _, seal := range []string{strings.Repeat("a.", 150), "b" + strings.Repeat("a.", 150), strings.Repeat("a--", 100)} {
-		got := RouteName(seal, "direct")
+	for _, networkConfig := range []string{strings.Repeat("a.", 150), "b" + strings.Repeat("a.", 150), strings.Repeat("a--", 100)} {
+		got := RouteName(networkConfig, "direct")
 		assert.Empty(t, validation.IsDNS1123Subdomain(got), "invalid route name %q", got)
 	}
 }

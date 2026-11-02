@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
+	sigillumv1 "github.com/helmetica-framework/sigillum/api/v1"
 )
 
 // errClassNotFound separates "the class was deleted" from "the class is wrong".
@@ -16,7 +16,7 @@ var errClassNotFound = errors.New("exposure class not found")
 // defaultClassName is the class an exposure falls back to when it names none:
 // its protocol, lowercased. Object names are lowercase DNS labels, the Protocol
 // enum is upper case, so the two have to be bridged somewhere.
-func defaultClassName(p sealsv1.Protocol) string {
+func defaultClassName(p sigillumv1.Protocol) string {
 	return strings.ToLower(string(p))
 }
 
@@ -25,7 +25,7 @@ func defaultClassName(p sealsv1.Protocol) string {
 // An empty ExposureClass name means the class named after the protocol, so
 // there is only ever one candidate: names are unique and cluster-scoped. That
 // is the whole reason there is no default flag.
-func resolveClass(classes []sealsv1.ExposureClass, e sealsv1.Exposure) (*sealsv1.ExposureClass, error) {
+func resolveClass(classes []sigillumv1.ExposureClass, e sigillumv1.Exposure) (*sigillumv1.ExposureClass, error) {
 	className := e.ExposureClass
 	if className == "" {
 		className = defaultClassName(e.Protocol)
@@ -52,7 +52,7 @@ func resolveClass(classes []sealsv1.ExposureClass, e sealsv1.Exposure) (*sealsv1
 }
 
 // supports reports whether c can carry p.
-func supports(c sealsv1.ExposureClass, p sealsv1.Protocol) bool {
+func supports(c sigillumv1.ExposureClass, p sigillumv1.Protocol) bool {
 	for _, s := range c.Spec.Supports {
 		if s == p {
 			return true
@@ -65,17 +65,17 @@ func supports(c sealsv1.ExposureClass, p sealsv1.Protocol) bool {
 // checkUsable rejects a class the controller cannot act on yet. The CRD enum
 // already blocks most of this on write, but an object written before the enum
 // existed still has to fail with a message that says what to change.
-func checkUsable(c sealsv1.ExposureClass) error {
-	if c.Spec.Type != sealsv1.ExposureTypeGateway {
+func checkUsable(c sigillumv1.ExposureClass) error {
+	if c.Spec.Type != sigillumv1.ExposureTypeGateway {
 		return fmt.Errorf("exposure class %s: type %s is not supported, only %s is",
-			c.GetName(), c.Spec.Type, sealsv1.ExposureTypeGateway)
+			c.GetName(), c.Spec.Type, sigillumv1.ExposureTypeGateway)
 	}
 
 	// TLS is nil on every TCP class and on every HTTP class that leaves the
 	// certificate to the gateway, so it has to be checked before the mode.
-	if c.Spec.TLS != nil && c.Spec.TLS.Mode == sealsv1.TLSModePerExposure {
+	if c.Spec.TLS != nil && c.Spec.TLS.Mode == sigillumv1.TLSModePerExposure {
 		return fmt.Errorf("exposure class %s: tls.mode %s is not implemented yet, use %s",
-			c.GetName(), sealsv1.TLSModePerExposure, sealsv1.TLSModeGatewayTerminated)
+			c.GetName(), sigillumv1.TLSModePerExposure, sigillumv1.TLSModeGatewayTerminated)
 	}
 
 	return nil

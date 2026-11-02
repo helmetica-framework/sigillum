@@ -1,4 +1,4 @@
-apiVersion: seals.helmetica.io/v1
+apiVersion: sigillum.helmetica.io/v1
 kind: ExposureClass
 metadata:
   name: tcp

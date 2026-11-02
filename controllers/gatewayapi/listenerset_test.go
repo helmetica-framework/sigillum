@@ -96,11 +96,11 @@ func TestListeners_SkipsAnOutOfRangePort(t *testing.T) {
 	assert.Equal(t, "good", got[0].Name)
 }
 
-// sealOwner is the controller owner reference a Seal produces.
-func sealOwner() *metav1ac.OwnerReferenceApplyConfiguration {
+// networkConfigOwner is the controller owner reference a NetworkConfig produces.
+func networkConfigOwner() *metav1ac.OwnerReferenceApplyConfiguration {
 	return metav1ac.OwnerReference().
-		WithAPIVersion("seals.helmetica.io/v1").
-		WithKind("Seal").
+		WithAPIVersion("sigillum.helmetica.io/v1").
+		WithKind("NetworkConfig").
 		WithName("networkconfig").
 		WithUID("11111111-2222-3333-4444-555555555555").
 		WithController(true).
@@ -108,7 +108,7 @@ func sealOwner() *metav1ac.OwnerReferenceApplyConfiguration {
 }
 
 func buildSet(parent ShardRef, listeners ...Listener) (*gwac.ListenerSetApplyConfiguration, error) {
-	return BuildListenerSet("networkconfig", "redis-7f3", parent, listeners, sealOwner())
+	return BuildListenerSet("networkconfig", "redis-7f3", parent, listeners, networkConfigOwner())
 }
 
 // builtSet is buildSet on tcp-0, for tests that expect no error.
@@ -176,11 +176,11 @@ func TestBuildListenerSet_SetsTheControllerOwnerReference(t *testing.T) {
 
 	require.Len(t, ac.OwnerReferences, 1)
 	ref := ac.OwnerReferences[0]
-	assert.Equal(t, "Seal", *ref.Kind)
+	assert.Equal(t, "NetworkConfig", *ref.Kind)
 	assert.Equal(t, "networkconfig", *ref.Name)
 	assert.EqualValues(t, "11111111-2222-3333-4444-555555555555", *ref.UID)
 	assert.True(t, *ref.Controller)
-	assert.True(t, *ref.BlockOwnerDeletion, "the ListenerSet must go when the Seal goes")
+	assert.True(t, *ref.BlockOwnerDeletion, "the ListenerSet must go when the NetworkConfig goes")
 }
 
 // The point of both guards: nothing the builder writes is unreadable, or
@@ -210,7 +210,7 @@ func TestBuildListenerSet_NoListenersIsNilWithNoError(t *testing.T) {
 }
 
 // A nameless parent reads back as no parent at all, so the set's ports would be
-// invisible to allocation and handed to a second Seal.
+// invisible to allocation and handed to a second NetworkConfig.
 func TestBuildListenerSet_ParentWithNoNameIsAnError(t *testing.T) {
 	ac, err := buildSet(ShardRef{Namespace: "kgateway-system"},
 		Listener{Name: "direct", Protocol: "TCP", Port: 30007})
@@ -335,7 +335,7 @@ func TestListenerStates_NilObjectIsEmpty(t *testing.T) {
 	assert.Empty(t, ListenerStates(nil))
 }
 
-func TestListenerSetName_JoinsSealAndExposure(t *testing.T) {
+func TestListenerSetName_JoinsNetworkConfigAndExposure(t *testing.T) {
 	assert.Equal(t, "networkconfig-direct", ListenerSetName("networkconfig", "direct"))
 }
 

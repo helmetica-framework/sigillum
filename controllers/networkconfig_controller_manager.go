@@ -25,8 +25,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 
-	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
-	sealsacv1 "github.com/helmetica-framework/sigillum/applyconfiguration/api/v1"
+	sigillumv1 "github.com/helmetica-framework/sigillum/api/v1"
+	sigillumacv1 "github.com/helmetica-framework/sigillum/applyconfiguration/api/v1"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
@@ -39,13 +39,13 @@ const (
 	policyName = "allow-service-access"
 )
 
-// SealManager reconciles Seal objects.
-type SealManager struct {
+// NetworkConfigManager reconciles NetworkConfig objects.
+type NetworkConfigManager struct {
 	client.Client
 
 	// APIReader bypasses the cache. Port allocation needs it: the cache has
 	// not seen the ListenerSet this same controller wrote a moment ago, so a
-	// cached list would hand the same port to the next Seal.
+	// cached list would hand the same port to the next NetworkConfig.
 	APIReader client.Reader
 
 	// Rand picks ports. Nil means a random seed on first use.
@@ -63,75 +63,75 @@ type SealManager struct {
 var errNoGatewayAPI = errors.New("gateway api is not installed in this cluster")
 
 type phase struct {
-	Phase     sealsv1.SealPhase
+	Phase     sigillumv1.NetworkConfigPhase
 	Message   string
-	Exposures []sealsv1.ExposureStatus
+	Exposures []sigillumv1.ExposureStatus
 }
 
-// +kubebuilder:rbac:groups=seals.helmetica.io,resources=seals,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=seals.helmetica.io,resources=seals/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=sigillum.helmetica.io,resources=networkconfigs,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=sigillum.helmetica.io,resources=networkconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
-// +kubebuilder:rbac:groups=seals.helmetica.io,resources=exposureclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups=sigillum.helmetica.io,resources=exposureclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=listenersets;tcproutes,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=listenersets/status;tcproutes/status,verbs=get
 
-// Reconcile drives a Seal's status to reflect desiredPhase. There is nothing
+// Reconcile drives a NetworkConfig's status to reflect desiredPhase. There is nothing
 // else to do yet: the placeholder owns no other cluster objects, so this is
-// just a settle-and-write loop over the Seal itself.
-func (r *SealManager) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := r.Log.WithValues("seal", req.NamespacedName)
+// just a settle-and-write loop over the NetworkConfig itself.
+func (r *NetworkConfigManager) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	log := r.Log.WithValues("networkconfig", req.NamespacedName)
 
-	seal := &sealsv1.Seal{}
-	err := r.Get(ctx, req.NamespacedName, seal)
+	networkConfig := &sigillumv1.NetworkConfig{}
+	err := r.Get(ctx, req.NamespacedName, networkConfig)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			log.V(1).Info("seal is gone, nothing to do")
+			log.V(1).Info("network config is gone, nothing to do")
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
 	}
 
-	if !seal.GetDeletionTimestamp().IsZero() {
-		log.V(1).Info("seal is being deleted, nothing to do")
+	if !networkConfig.GetDeletionTimestamp().IsZero() {
+		log.V(1).Info("network config is being deleted, nothing to do")
 		return ctrl.Result{}, nil
 	}
 
-	want, rerr := r.desiredPhase(ctx, seal)
-	if err := r.writeStatus(ctx, seal, want); err != nil {
+	want, rerr := r.desiredPhase(ctx, networkConfig)
+	if err := r.writeStatus(ctx, networkConfig, want); err != nil {
 		return ctrl.Result{}, errors.Join(rerr, err)
 	}
 	return ctrl.Result{}, rerr
 }
 
-func (r *SealManager) writeStatus(ctx context.Context, seal *sealsv1.Seal, want phase) error {
-	if seal.Status.Phase == want.Phase &&
-		seal.Status.ObservedGeneration == seal.Generation &&
-		seal.Status.Message == want.Message &&
-		slices.Equal(seal.Status.Exposures, want.Exposures) {
+func (r *NetworkConfigManager) writeStatus(ctx context.Context, networkConfig *sigillumv1.NetworkConfig, want phase) error {
+	if networkConfig.Status.Phase == want.Phase &&
+		networkConfig.Status.ObservedGeneration == networkConfig.Generation &&
+		networkConfig.Status.Message == want.Message &&
+		slices.Equal(networkConfig.Status.Exposures, want.Exposures) {
 		return nil
 	}
 
-	if seal.Status.Phase != want.Phase {
-		log := r.Log.WithValues("seal", client.ObjectKeyFromObject(seal))
-		log.Info("seal phase changed", "from", seal.Status.Phase, "to", want.Phase)
+	if networkConfig.Status.Phase != want.Phase {
+		log := r.Log.WithValues("networkconfig", client.ObjectKeyFromObject(networkConfig))
+		log.Info("network config phase changed", "from", networkConfig.Status.Phase, "to", want.Phase)
 	}
 
-	st := sealsacv1.SealStatus().
+	st := sigillumacv1.NetworkConfigStatus().
 		WithPhase(want.Phase).
-		WithObservedGeneration(seal.Generation).
+		WithObservedGeneration(networkConfig.Generation).
 		WithMessage(want.Message)
 
 	for _, e := range want.Exposures {
 		st.WithExposures(exposureStatusAC(e))
 	}
 
-	status := sealsacv1.Seal(seal.GetName(), seal.GetNamespace()).WithStatus(st)
+	status := sigillumacv1.NetworkConfig(networkConfig.GetName(), networkConfig.GetNamespace()).WithStatus(st)
 
 	if err := r.Status().Apply(ctx, status, fieldOwner, client.ForceOwnership); err != nil {
-		return fmt.Errorf("applying seal status: %w", err)
+		return fmt.Errorf("applying network config status: %w", err)
 	}
 
 	return nil
@@ -139,8 +139,8 @@ func (r *SealManager) writeStatus(ctx context.Context, seal *sealsv1.Seal, want 
 
 // exposureStatusAC sets only the fields that hold a value. Apply sends a set
 // zero as a real value, and a port of 0 fails the CRD's minimum of 1.
-func exposureStatusAC(e sealsv1.ExposureStatus) *sealsacv1.ExposureStatusApplyConfiguration {
-	ac := sealsacv1.ExposureStatus().
+func exposureStatusAC(e sigillumv1.ExposureStatus) *sigillumacv1.ExposureStatusApplyConfiguration {
+	ac := sigillumacv1.ExposureStatus().
 		WithName(e.Name).
 		WithReady(e.Ready)
 
@@ -173,10 +173,10 @@ func exposureStatusAC(e sealsv1.ExposureStatus) *sealsacv1.ExposureStatusApplyCo
 }
 
 // desiredPhase is the seam where sigillum's real logic goes.
-func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (phase, error) {
+func (r *NetworkConfigManager) desiredPhase(ctx context.Context, networkConfig *sigillumv1.NetworkConfig) (phase, error) {
 	instanceNS := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: seal.GetNamespace(),
+			Name: networkConfig.GetNamespace(),
 		},
 	}
 
@@ -185,88 +185,88 @@ func (r *SealManager) desiredPhase(ctx context.Context, seal *sealsv1.Seal) (pha
 		errf := fmt.Errorf("getting namespace: %w", err)
 		// Keep the last exposures: an apply without them wipes their ports and
 		// conflict counts.
-		return phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error(), Exposures: seal.Status.Exposures}, errf
+		return phase{Phase: sigillumv1.NetworkConfigPhaseFailed, Message: errf.Error(), Exposures: networkConfig.Status.Exposures}, errf
 	}
 
 	var (
-		selectors []sealsv1.GatewaySelector
+		selectors []sigillumv1.GatewaySelector
 		outcomes  []exposureOutcome
 		xerr      error
 	)
-	if len(seal.Spec.Expose) > 0 {
-		classes := &sealsv1.ExposureClassList{}
+	if len(networkConfig.Spec.Expose) > 0 {
+		classes := &sigillumv1.ExposureClassList{}
 		if err := r.List(ctx, classes); err != nil {
 			errf := fmt.Errorf("listing exposure classes: %w", err)
-			return phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error(), Exposures: seal.Status.Exposures}, errf
+			return phase{Phase: sigillumv1.NetworkConfigPhaseFailed, Message: errf.Error(), Exposures: networkConfig.Status.Exposures}, errf
 		}
 
 		if r.NoGatewayAPI {
-			outcomes = noGatewayAPIOutcomes(seal.Spec.Expose)
-			return r.applyPolicy(ctx, seal, instanceNS, nil, outcomes)
+			outcomes = noGatewayAPIOutcomes(networkConfig.Spec.Expose)
+			return r.applyPolicy(ctx, networkConfig, instanceNS, nil, outcomes)
 		}
 
-		outcomes, xerr = r.reconcileExposures(ctx, seal, classes.Items)
+		outcomes, xerr = r.reconcileExposures(ctx, networkConfig, classes.Items)
 
-		selectors, err = gatewaySelectors(classes.Items, seal.Spec.Expose)
+		selectors, err = gatewaySelectors(classes.Items, networkConfig.Spec.Expose)
 		if errors.Is(err, errClassNotFound) {
 			// Leave the live policy alone: rewriting it without this class's
 			// peer would cut the gateway off because of an operator mistake.
-			return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseFailed, Message: err.Error()}), xerr
+			return rollUp(outcomes, phase{Phase: sigillumv1.NetworkConfigPhaseFailed, Message: err.Error()}), xerr
 		}
 		if err != nil {
-			return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseFailed, Message: err.Error()}),
+			return rollUp(outcomes, phase{Phase: sigillumv1.NetworkConfigPhaseFailed, Message: err.Error()}),
 				errors.Join(xerr, err)
 		}
 	} else if !r.NoGatewayAPI {
 		// Remove whatever listeners and routes are left. This follows the
 		// objects, not status.exposures, so a status that lost its list cannot
 		// leak ports.
-		if _, err := r.reconcileExposures(ctx, seal, nil); err != nil {
+		if _, err := r.reconcileExposures(ctx, networkConfig, nil); err != nil {
 			// Keep the old exposures in status until the cleanup is done.
 			return phase{
-				Phase:     sealsv1.SealPhaseFailed,
+				Phase:     sigillumv1.NetworkConfigPhaseFailed,
 				Message:   err.Error(),
-				Exposures: seal.Status.Exposures,
+				Exposures: networkConfig.Status.Exposures,
 			}, err
 		}
 	}
 
-	p, err := r.applyPolicy(ctx, seal, instanceNS, selectors, outcomes)
+	p, err := r.applyPolicy(ctx, networkConfig, instanceNS, selectors, outcomes)
 	return p, errors.Join(xerr, err)
 }
 
-func noGatewayAPIOutcomes(exposures []sealsv1.Exposure) []exposureOutcome {
+func noGatewayAPIOutcomes(exposures []sigillumv1.Exposure) []exposureOutcome {
 	outcomes := make([]exposureOutcome, len(exposures))
 	for i, e := range exposures {
 		outcomes[i] = exposureOutcome{
-			Status: sealsv1.ExposureStatus{Name: e.Name, Message: errNoGatewayAPI.Error()},
+			Status: sigillumv1.ExposureStatus{Name: e.Name, Message: errNoGatewayAPI.Error()},
 			Failed: true,
 		}
 	}
 	return outcomes
 }
 
-// applyPolicy writes the seal's NetworkPolicy and rolls outcomes into the
+// applyPolicy writes the network config's NetworkPolicy and rolls outcomes into the
 // resulting phase.
-func (r *SealManager) applyPolicy(
+func (r *NetworkConfigManager) applyPolicy(
 	ctx context.Context,
-	seal *sealsv1.Seal,
+	networkConfig *sigillumv1.NetworkConfig,
 	instanceNS *corev1.Namespace,
-	selectors []sealsv1.GatewaySelector,
+	selectors []sigillumv1.GatewaySelector,
 	outcomes []exposureOutcome,
 ) (phase, error) {
-	peers, provision := ingressPeers(seal, instanceNS, selectors)
+	peers, provision := ingressPeers(networkConfig, instanceNS, selectors)
 	if !provision {
-		return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseReady, Message: "empty config, skipping provisioning"}), nil
+		return rollUp(outcomes, phase{Phase: sigillumv1.NetworkConfigPhaseReady, Message: "empty config, skipping provisioning"}), nil
 	}
 
-	owner, err := controllerRef(seal, r.Scheme)
+	owner, err := controllerRef(networkConfig, r.Scheme)
 	if err != nil {
 		errf := fmt.Errorf("building owner reference: %w", err)
-		return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}), errf
+		return rollUp(outcomes, phase{Phase: sigillumv1.NetworkConfigPhaseFailed, Message: errf.Error()}), errf
 	}
 
-	np := netv1ac.NetworkPolicy(policyName, seal.GetNamespace()).
+	np := netv1ac.NetworkPolicy(policyName, networkConfig.GetNamespace()).
 		WithOwnerReferences(owner).
 		WithSpec(netv1ac.NetworkPolicySpec().
 			// An empty selector matches every pod, so the policy covers the
@@ -277,17 +277,17 @@ func (r *SealManager) applyPolicy(
 
 	if err := r.Apply(ctx, np, fieldOwner, client.ForceOwnership); err != nil {
 		errf := fmt.Errorf("reconciling network policy: %w", err)
-		return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseFailed, Message: errf.Error()}), errf
+		return rollUp(outcomes, phase{Phase: sigillumv1.NetworkConfigPhaseFailed, Message: errf.Error()}), errf
 	}
 
-	return rollUp(outcomes, phase{Phase: sealsv1.SealPhaseReady, Message: "networkpolicy applied"}), nil
+	return rollUp(outcomes, phase{Phase: sigillumv1.NetworkConfigPhaseReady, Message: "networkpolicy applied"}), nil
 }
 
-// controllerRef builds the seal's controller owner reference.
+// controllerRef builds the network config's controller owner reference.
 // controllerutil.SetControllerReference cannot be used here: it takes a
 // metav1.Object, and an apply configuration is not one.
-func controllerRef(seal *sealsv1.Seal, scheme *runtime.Scheme) (*metav1ac.OwnerReferenceApplyConfiguration, error) {
-	gvk, err := apiutil.GVKForObject(seal, scheme)
+func controllerRef(networkConfig *sigillumv1.NetworkConfig, scheme *runtime.Scheme) (*metav1ac.OwnerReferenceApplyConfiguration, error) {
+	gvk, err := apiutil.GVKForObject(networkConfig, scheme)
 	if err != nil {
 		return nil, err
 	}
@@ -295,8 +295,8 @@ func controllerRef(seal *sealsv1.Seal, scheme *runtime.Scheme) (*metav1ac.OwnerR
 	return metav1ac.OwnerReference().
 		WithAPIVersion(gvk.GroupVersion().String()).
 		WithKind(gvk.Kind).
-		WithName(seal.GetName()).
-		WithUID(seal.GetUID()).
+		WithName(networkConfig.GetName()).
+		WithUID(networkConfig.GetUID()).
 		WithController(true).
 		WithBlockOwnerDeletion(true), nil
 }
@@ -304,15 +304,15 @@ func controllerRef(seal *sealsv1.Seal, scheme *runtime.Scheme) (*metav1ac.OwnerR
 // ingressPeers works out who may reach this namespace, and reports whether
 // there is anything to provision at all. AllowAllNamespaces takes precedence.
 //
-// gwSelectors come from the ExposureClasses this seal's exposures resolved
+// gwSelectors come from the ExposureClasses this network config's exposures resolved
 // to. Without a peer for the gateway pods, the policy blocks the very traffic
 // the exposure exists to allow.
 func ingressPeers(
-	seal *sealsv1.Seal,
+	networkConfig *sigillumv1.NetworkConfig,
 	instanceNS *corev1.Namespace,
-	gwSelectors []sealsv1.GatewaySelector,
+	gwSelectors []sigillumv1.GatewaySelector,
 ) ([]*netv1ac.NetworkPolicyPeerApplyConfiguration, bool) {
-	if ptr.Deref(seal.Spec.AllowAllNamespaces, false) {
+	if ptr.Deref(networkConfig.Spec.AllowAllNamespaces, false) {
 		// A selector that matches no labels matches every namespace.
 		return []*netv1ac.NetworkPolicyPeerApplyConfiguration{
 			netv1ac.NetworkPolicyPeer().WithNamespaceSelector(metav1ac.LabelSelector()),
@@ -326,11 +326,11 @@ func ingressPeers(
 	}
 
 	// let's not create an allow all by mistake
-	if !ok && len(seal.Spec.AllowedNamespaces) == 0 && len(gwSelectors) == 0 {
+	if !ok && len(networkConfig.Spec.AllowedNamespaces) == 0 && len(gwSelectors) == 0 {
 		return nil, false
 	}
 
-	for _, ns := range seal.Spec.AllowedNamespaces {
+	for _, ns := range networkConfig.Spec.AllowedNamespaces {
 		peers = append(peers, nsPeer(ns))
 	}
 
@@ -347,7 +347,7 @@ func nsPeer(ns string) *netv1ac.NetworkPolicyPeerApplyConfiguration {
 			WithMatchLabels(map[string]string{kubeMetadataNameLabel: ns}))
 }
 
-// gatewaySelectors collects the gateway selectors of the classes this seal's
+// gatewaySelectors collects the gateway selectors of the classes this network config's
 // exposures resolve to.
 //
 // Only TCP exposures count: HTTP is not served yet, and a peer for a route
@@ -355,11 +355,11 @@ func nsPeer(ns string) *netv1ac.NetworkPolicyPeerApplyConfiguration {
 //
 // A missing class is returned as an error wrapping errClassNotFound. Any other
 // resolve error skips that exposure: it gets no route, so it needs no peer.
-func gatewaySelectors(classes []sealsv1.ExposureClass, exposures []sealsv1.Exposure) ([]sealsv1.GatewaySelector, error) {
-	selectors := make([]sealsv1.GatewaySelector, 0, len(exposures))
+func gatewaySelectors(classes []sigillumv1.ExposureClass, exposures []sigillumv1.Exposure) ([]sigillumv1.GatewaySelector, error) {
+	selectors := make([]sigillumv1.GatewaySelector, 0, len(exposures))
 
 	for _, e := range exposures {
-		if e.Protocol != sealsv1.ProtocolTCP {
+		if e.Protocol != sigillumv1.ProtocolTCP {
 			continue
 		}
 
@@ -386,8 +386,8 @@ func gatewaySelectors(classes []sealsv1.ExposureClass, exposures []sealsv1.Expos
 // dedupeSelectors drops repeated selectors and sorts the rest, so two
 // exposures on one class give one peer, and the policy is not rewritten on
 // every reconcile because the order changed.
-func dedupeSelectors(sels []sealsv1.GatewaySelector) []sealsv1.GatewaySelector {
-	dedupMap := make(map[string]sealsv1.GatewaySelector, len(sels))
+func dedupeSelectors(sels []sigillumv1.GatewaySelector) []sigillumv1.GatewaySelector {
+	dedupMap := make(map[string]sigillumv1.GatewaySelector, len(sels))
 
 	for _, sel := range sels {
 		key, _ := json.Marshal(sel)
@@ -396,7 +396,7 @@ func dedupeSelectors(sels []sealsv1.GatewaySelector) []sealsv1.GatewaySelector {
 
 	keys := slices.Sorted(maps.Keys(dedupMap))
 
-	deduped := make([]sealsv1.GatewaySelector, 0, len(keys))
+	deduped := make([]sigillumv1.GatewaySelector, 0, len(keys))
 	for _, k := range keys {
 		deduped = append(deduped, dedupMap[k])
 	}
@@ -405,7 +405,7 @@ func dedupeSelectors(sels []sealsv1.GatewaySelector) []sealsv1.GatewaySelector {
 }
 
 // gatewayPeer is the ingress peer for one class's gateway pods.
-func gatewayPeer(sel sealsv1.GatewaySelector) *netv1ac.NetworkPolicyPeerApplyConfiguration {
+func gatewayPeer(sel sigillumv1.GatewaySelector) *netv1ac.NetworkPolicyPeerApplyConfiguration {
 	peer := netv1ac.NetworkPolicyPeer()
 	if ns := labelSelectorAC(sel.NamespaceSelector); ns != nil {
 		peer.WithNamespaceSelector(ns)
@@ -436,17 +436,17 @@ func labelSelectorAC(sel *metav1.LabelSelector) *metav1ac.LabelSelectorApplyConf
 	return ac
 }
 
-// sealControllerOptions sets one worker, on purpose. Port allocation reads the
+// networkConfigControllerOptions sets one worker, on purpose. Port allocation reads the
 // live ListenerSet list and then writes. Two workers interleave those two
 // steps and hand out the same port.
-func sealControllerOptions() controller.Options {
+func networkConfigControllerOptions() controller.Options {
 	return controller.Options{MaxConcurrentReconciles: 1}
 }
 
-// SetupWithManager wires the controller: watch Seal, own the objects it writes,
+// SetupWithManager wires the controller: watch NetworkConfig, own the objects it writes,
 // and reconcile again when an ExposureClass changes.
-func (r *SealManager) SetupWithManager(ctx context.Context, name string, mgr ctrl.Manager) error {
-	err := mgr.GetFieldIndexer().IndexField(ctx, &sealsv1.Seal{},
+func (r *NetworkConfigManager) SetupWithManager(ctx context.Context, name string, mgr ctrl.Manager) error {
+	err := mgr.GetFieldIndexer().IndexField(ctx, &sigillumv1.NetworkConfig{},
 		exposureClassIndex, exposureClassIndexKeys)
 	if err != nil {
 		return err
@@ -454,10 +454,10 @@ func (r *SealManager) SetupWithManager(ctx context.Context, name string, mgr ctr
 
 	b := ctrl.NewControllerManagedBy(mgr).
 		Named(name).
-		For(&sealsv1.Seal{}).
+		For(&sigillumv1.NetworkConfig{}).
 		Owns(&netv1.NetworkPolicy{}).
-		Watches(&sealsv1.ExposureClass{}, handler.EnqueueRequestsFromMapFunc(r.sealsForClass)).
-		WithOptions(sealControllerOptions())
+		Watches(&sigillumv1.ExposureClass{}, handler.EnqueueRequestsFromMapFunc(r.networkConfigsForClass)).
+		WithOptions(networkConfigControllerOptions())
 
 	if !r.NoGatewayAPI {
 		b = b.Owns(&gwv1.ListenerSet{}).

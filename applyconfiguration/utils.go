@@ -15,7 +15,7 @@ import (
 // apply configuration type exists for the given GroupVersionKind.
 func ForKind(kind schema.GroupVersionKind) interface{} {
 	switch kind {
-	// Group=seals.helmetica.io, Version=v1
+	// Group=sigillum.helmetica.io, Version=v1
 	case v1.SchemeGroupVersion.WithKind("Backend"):
 		return &apiv1.BackendApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("Exposure"):
@@ -32,16 +32,16 @@ func ForKind(kind schema.GroupVersionKind) interface{} {
 		return &apiv1.GatewaySelectorApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("IssuerRef"):
 		return &apiv1.IssuerRefApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("NetworkConfig"):
+		return &apiv1.NetworkConfigApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("NetworkConfigSpec"):
+		return &apiv1.NetworkConfigSpecApplyConfiguration{}
+	case v1.SchemeGroupVersion.WithKind("NetworkConfigStatus"):
+		return &apiv1.NetworkConfigStatusApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("ParentRef"):
 		return &apiv1.ParentRefApplyConfiguration{}
 	case v1.SchemeGroupVersion.WithKind("PortRange"):
 		return &apiv1.PortRangeApplyConfiguration{}
-	case v1.SchemeGroupVersion.WithKind("Seal"):
-		return &apiv1.SealApplyConfiguration{}
-	case v1.SchemeGroupVersion.WithKind("SealSpec"):
-		return &apiv1.SealSpecApplyConfiguration{}
-	case v1.SchemeGroupVersion.WithKind("SealStatus"):
-		return &apiv1.SealStatusApplyConfiguration{}
 
 	}
 	return nil

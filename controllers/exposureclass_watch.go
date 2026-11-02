@@ -3,30 +3,30 @@ package controllers
 import (
 	"context"
 
-	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
+	sigillumv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-// exposureClassIndex is the field index sealsForClass queries. An exposure that
+// exposureClassIndex is the field index networkConfigsForClass queries. An exposure that
 // leaves the class name empty is indexed under "", so a change to a default
 // class still finds it.
 const exposureClassIndex = "spec.expose.exposureClass"
 
-// exposureClassIndexKeys returns the class names a Seal references, without
+// exposureClassIndexKeys returns the class names a NetworkConfig references, without
 // duplicates.
 func exposureClassIndexKeys(o client.Object) []string {
-	seal, ok := o.(*sealsv1.Seal)
+	networkConfig, ok := o.(*sigillumv1.NetworkConfig)
 	if !ok {
 		return nil
 	}
 
-	keys := make([]string, 0, len(seal.Spec.Expose))
-	seen := make(map[string]struct{}, len(seal.Spec.Expose))
+	keys := make([]string, 0, len(networkConfig.Spec.Expose))
+	seen := make(map[string]struct{}, len(networkConfig.Spec.Expose))
 
-	for i := range seal.Spec.Expose {
-		name := seal.Spec.Expose[i].ExposureClass
+	for i := range networkConfig.Spec.Expose {
+		name := networkConfig.Spec.Expose[i].ExposureClass
 		if _, ok := seen[name]; ok {
 			continue
 		}
@@ -38,18 +38,18 @@ func exposureClassIndexKeys(o client.Object) []string {
 	return keys
 }
 
-// sealsForClass maps a changed ExposureClass to every Seal it affects: those
+// networkConfigsForClass maps a changed ExposureClass to every NetworkConfig it affects: those
 // naming it, and, when it is a default, those leaving the class name empty for
 // its protocol.
 //
 // The protocol comes from the class name, not spec.supports. A default class
-// that drops its own protocol must still wake the Seals using it.
-func (r *SealManager) sealsForClass(ctx context.Context, obj client.Object) []reconcile.Request {
+// that drops its own protocol must still wake the NetworkConfigs using it.
+func (r *NetworkConfigManager) networkConfigsForClass(ctx context.Context, obj client.Object) []reconcile.Request {
 	keys := map[types.NamespacedName]struct{}{}
 
-	byName := &sealsv1.SealList{}
+	byName := &sigillumv1.NetworkConfigList{}
 	if err := r.List(ctx, byName, client.MatchingFields{exposureClassIndex: obj.GetName()}); err != nil {
-		r.Log.Error(err, "listing seals for exposureClass", "name", obj.GetName())
+		r.Log.Error(err, "listing network configs for exposureClass", "name", obj.GetName())
 	}
 
 	for i := range byName.Items {
@@ -57,9 +57,9 @@ func (r *SealManager) sealsForClass(ctx context.Context, obj client.Object) []re
 	}
 
 	if p, ok := defaultFor(obj.GetName()); ok {
-		byDefault := &sealsv1.SealList{}
+		byDefault := &sigillumv1.NetworkConfigList{}
 		if err := r.List(ctx, byDefault, client.MatchingFields{exposureClassIndex: ""}); err != nil {
-			r.Log.Error(err, "listing seals for default exposureClass", "name", obj.GetName())
+			r.Log.Error(err, "listing network configs for default exposureClass", "name", obj.GetName())
 		}
 
 		for i := range byDefault.Items {
@@ -78,8 +78,8 @@ func (r *SealManager) sealsForClass(ctx context.Context, obj client.Object) []re
 }
 
 // defaultFor returns the protocol a class is the default for, if any.
-func defaultFor(className string) (sealsv1.Protocol, bool) {
-	for _, p := range []sealsv1.Protocol{sealsv1.ProtocolTCP, sealsv1.ProtocolHTTP, sealsv1.ProtocolHTTPS} {
+func defaultFor(className string) (sigillumv1.Protocol, bool) {
+	for _, p := range []sigillumv1.Protocol{sigillumv1.ProtocolTCP, sigillumv1.ProtocolHTTP, sigillumv1.ProtocolHTTPS} {
 		if defaultClassName(p) == className {
 			return p, true
 		}
@@ -88,8 +88,8 @@ func defaultFor(className string) (sealsv1.Protocol, bool) {
 	return "", false
 }
 
-// takesDefault reports whether a Seal has an exposure on p with no class name.
-func takesDefault(s *sealsv1.Seal, p sealsv1.Protocol) bool {
+// takesDefault reports whether a NetworkConfig has an exposure on p with no class name.
+func takesDefault(s *sigillumv1.NetworkConfig, p sigillumv1.Protocol) bool {
 	for i := range s.Spec.Expose {
 		if s.Spec.Expose[i].ExposureClass == "" && s.Spec.Expose[i].Protocol == p {
 			return true

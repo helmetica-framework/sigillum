@@ -15,7 +15,7 @@ import (
 // reports them in status; letting a user pick one would reintroduce the clash
 // this controller exists to prevent.
 type ExposureApplyConfiguration struct {
-	// Name identifies the exposure within this Seal. It becomes the listener
+	// Name identifies the exposure within this NetworkConfig. It becomes the listener
 	// and route name, so it has to be a DNS label.
 	Name *string `json:"name,omitempty"`
 	// Empty means the class named after this exposure's protocol, lowercased.

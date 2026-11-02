@@ -11,22 +11,22 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
+	sigillumv1 "github.com/helmetica-framework/sigillum/api/v1"
 )
 
 func TestReconcile_NoGatewayAPIFailsTheExposure(t *testing.T) {
-	s := seal(1)
-	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379)}
+	s := networkConfig(1)
+	s.Spec.Expose = []sigillumv1.Exposure{tcpExposure("direct", 6379)}
 	shard := tcpShard("tcp-0")
 	m, c := newManager(s, exposableTCPClass(), &shard)
 	m.NoGatewayAPI = true
 
-	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: networkConfigKey()})
 	require.NoError(t, err)
 
-	got := &sealsv1.Seal{}
-	require.NoError(t, c.Get(context.Background(), sealKey(), got))
-	assert.Equal(t, sealsv1.SealPhaseFailed, got.Status.Phase)
+	got := &sigillumv1.NetworkConfig{}
+	require.NoError(t, c.Get(context.Background(), networkConfigKey(), got))
+	assert.Equal(t, sigillumv1.NetworkConfigPhaseFailed, got.Status.Phase)
 	assert.Contains(t, got.Status.Message, errNoGatewayAPI.Error())
 	require.Len(t, got.Status.Exposures, 1)
 	assert.Equal(t, "direct", got.Status.Exposures[0].Name)
@@ -38,13 +38,13 @@ func TestReconcile_NoGatewayAPIFailsTheExposure(t *testing.T) {
 }
 
 func TestReconcile_NoGatewayAPIStillWritesThePolicy(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	s.Spec.AllowedNamespaces = []string{"other"}
-	s.Spec.Expose = []sealsv1.Exposure{tcpExposure("direct", 6379)}
+	s.Spec.Expose = []sigillumv1.Exposure{tcpExposure("direct", 6379)}
 	m, c := newManager(s, exposableTCPClass())
 	m.NoGatewayAPI = true
 
-	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: networkConfigKey()})
 	require.NoError(t, err)
 
 	assert.Equal(t, []netv1.NetworkPolicyPeer{expectedNSPeer("other")}, ingressPeersOf(t, c),
@@ -52,16 +52,16 @@ func TestReconcile_NoGatewayAPIStillWritesThePolicy(t *testing.T) {
 }
 
 func TestReconcile_NoGatewayAPIWithoutExposuresIsReady(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	s.Spec.AllowedNamespaces = []string{"other"}
 	m, c := newManager(s)
 	m.NoGatewayAPI = true
 
-	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: sealKey()})
+	_, err := m.Reconcile(context.Background(), ctrl.Request{NamespacedName: networkConfigKey()})
 	require.NoError(t, err)
 
-	got := &sealsv1.Seal{}
-	require.NoError(t, c.Get(context.Background(), sealKey(), got))
-	assert.Equal(t, sealsv1.SealPhaseReady, got.Status.Phase)
+	got := &sigillumv1.NetworkConfig{}
+	require.NoError(t, c.Get(context.Background(), networkConfigKey(), got))
+	assert.Equal(t, sigillumv1.NetworkConfigPhaseReady, got.Status.Phase)
 	assert.Equal(t, "networkpolicy applied", got.Status.Message)
 }

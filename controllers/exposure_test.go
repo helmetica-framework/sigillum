@@ -15,27 +15,27 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
+	sigillumv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 )
 
 // tcpExposure is one TCP exposure pointing at the redis service.
-func tcpExposure(name string, port int32) sealsv1.Exposure {
-	return sealsv1.Exposure{
+func tcpExposure(name string, port int32) sigillumv1.Exposure {
+	return sigillumv1.Exposure{
 		Name:     name,
-		Protocol: sealsv1.ProtocolTCP,
-		Backend:  sealsv1.Backend{Service: "redis", Port: port},
+		Protocol: sigillumv1.ProtocolTCP,
+		Backend:  sigillumv1.Backend{Service: "redis", Port: port},
 	}
 }
 
-// tcpRoute seeds a TCPRoute owned by the Seal carrying uid.
+// tcpRoute seeds a TCPRoute owned by the NetworkConfig carrying uid.
 func tcpRoute(name, namespace string, uid types.UID) gwv1.TCPRoute {
 	return gwv1.TCPRoute{ObjectMeta: metav1.ObjectMeta{
 		Name:      name,
 		Namespace: namespace,
 		OwnerReferences: []metav1.OwnerReference{{
-			APIVersion:         sealsv1.GroupVersion.String(),
-			Kind:               "Seal",
+			APIVersion:         sigillumv1.GroupVersion.String(),
+			Kind:               "NetworkConfig",
 			Name:               "whoever",
 			UID:                uid,
 			Controller:         ptr.To(true),
@@ -76,11 +76,11 @@ func readTCPRoute(t *testing.T, c client.Client, name, namespace string) (*gwv1.
 }
 
 func TestReconcileTCPRoutes_AppliesOneRoutePerExposure(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 
 	err := m.reconcileTCPRoutes(context.Background(), s,
-		[]sealsv1.Exposure{tcpExposure("direct", 6379), tcpExposure("admin", 9121)})
+		[]sigillumv1.Exposure{tcpExposure("direct", 6379), tcpExposure("admin", 9121)})
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"sample-admin", "sample-direct"}, routeNames(t, c, "default"))
@@ -89,11 +89,11 @@ func TestReconcileTCPRoutes_AppliesOneRoutePerExposure(t *testing.T) {
 // The route has to reach the exposure's own backend, or traffic lands on the
 // wrong service.
 func TestReconcileTCPRoutes_CarriesTheExposureBackend(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 
 	err := m.reconcileTCPRoutes(context.Background(), s,
-		[]sealsv1.Exposure{tcpExposure("direct", 6379)})
+		[]sigillumv1.Exposure{tcpExposure("direct", 6379)})
 	require.NoError(t, err)
 
 	obj, found := readTCPRoute(t, c, "sample-direct", "default")
@@ -110,11 +110,11 @@ func TestReconcileTCPRoutes_CarriesTheExposureBackend(t *testing.T) {
 // The section name is what binds the route to one listener. Without it the
 // route would answer on every port the shard serves.
 func TestReconcileTCPRoutes_BindsToTheExposuresListener(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 
 	err := m.reconcileTCPRoutes(context.Background(), s,
-		[]sealsv1.Exposure{tcpExposure("direct", 6379)})
+		[]sigillumv1.Exposure{tcpExposure("direct", 6379)})
 	require.NoError(t, err)
 
 	obj, found := readTCPRoute(t, c, "sample-direct", "default")
@@ -129,11 +129,11 @@ func TestReconcileTCPRoutes_BindsToTheExposuresListener(t *testing.T) {
 }
 
 func TestReconcileTCPRoutes_SetsTheControllerOwnerReference(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 
 	err := m.reconcileTCPRoutes(context.Background(), s,
-		[]sealsv1.Exposure{tcpExposure("direct", 6379)})
+		[]sigillumv1.Exposure{tcpExposure("direct", 6379)})
 	require.NoError(t, err)
 
 	obj, found := readTCPRoute(t, c, "sample-direct", "default")
@@ -142,9 +142,9 @@ func TestReconcileTCPRoutes_SetsTheControllerOwnerReference(t *testing.T) {
 	refs := obj.GetOwnerReferences()
 
 	require.Len(t, refs, 1)
-	assert.Equal(t, "Seal", refs[0].Kind)
+	assert.Equal(t, "NetworkConfig", refs[0].Kind)
 	assert.Equal(t, "sample", refs[0].Name)
-	assert.Equal(t, sealUID, refs[0].UID)
+	assert.Equal(t, networkConfigUID, refs[0].UID)
 	assert.True(t, *refs[0].Controller)
 	assert.True(t, *refs[0].BlockOwnerDeletion)
 }
@@ -152,15 +152,15 @@ func TestReconcileTCPRoutes_SetsTheControllerOwnerReference(t *testing.T) {
 // A dropped exposure leaves a route pointing at a listener that no longer
 // exists, so the leftover has to go.
 func TestReconcileTCPRoutes_DeletesTheRouteOfADroppedExposure(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 	ctx := context.Background()
 
 	require.NoError(t, m.reconcileTCPRoutes(ctx, s,
-		[]sealsv1.Exposure{tcpExposure("direct", 6379), tcpExposure("admin", 9121)}))
+		[]sigillumv1.Exposure{tcpExposure("direct", 6379), tcpExposure("admin", 9121)}))
 
 	require.NoError(t, m.reconcileTCPRoutes(ctx, s,
-		[]sealsv1.Exposure{tcpExposure("direct", 6379)}))
+		[]sigillumv1.Exposure{tcpExposure("direct", 6379)}))
 
 	assert.Equal(t, []string{"sample-direct"}, routeNames(t, c, "default"))
 }
@@ -168,22 +168,22 @@ func TestReconcileTCPRoutes_DeletesTheRouteOfADroppedExposure(t *testing.T) {
 // A rename is a new exposure with a new port, so the old route must not stay
 // behind serving the old name.
 func TestReconcileTCPRoutes_ARenameReplacesTheRoute(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 	ctx := context.Background()
 
 	require.NoError(t, m.reconcileTCPRoutes(ctx, s,
-		[]sealsv1.Exposure{tcpExposure("direct", 6379)}))
+		[]sigillumv1.Exposure{tcpExposure("direct", 6379)}))
 
 	require.NoError(t, m.reconcileTCPRoutes(ctx, s,
-		[]sealsv1.Exposure{tcpExposure("primary", 6379)}))
+		[]sigillumv1.Exposure{tcpExposure("primary", 6379)}))
 
 	assert.Equal(t, []string{"sample-primary"}, routeNames(t, c, "default"))
 }
 
 func TestReconcileTCPRoutes_NoExposuresRemovesEveryRoute(t *testing.T) {
-	s := seal(1)
-	existing := tcpRoute("sample-direct", "default", sealUID)
+	s := networkConfig(1)
+	existing := tcpRoute("sample-direct", "default", networkConfigUID)
 	m, c := newManager(s, &existing)
 
 	err := m.reconcileTCPRoutes(context.Background(), s, nil)
@@ -193,24 +193,24 @@ func TestReconcileTCPRoutes_NoExposuresRemovesEveryRoute(t *testing.T) {
 }
 
 func TestReconcileTCPRoutes_NoExposuresAndNoRoutesIsNotAnError(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 
 	err := m.reconcileTCPRoutes(context.Background(), s, nil)
 
-	require.NoError(t, err, "a Seal that never had a TCP exposure reconciles cleanly")
+	require.NoError(t, err, "a NetworkConfig that never had a TCP exposure reconciles cleanly")
 	assert.Empty(t, routeNames(t, c, "default"))
 }
 
-// Two Seals share a namespace only by accident of naming, but one Seal deleting
+// Two NetworkConfigs share a namespace only by accident of naming, but one NetworkConfig deleting
 // another's route would take a live service down.
-func TestReconcileTCPRoutes_LeavesAnotherSealsRouteAlone(t *testing.T) {
-	s := seal(1)
+func TestReconcileTCPRoutes_LeavesAnotherNetworkConfigsRouteAlone(t *testing.T) {
+	s := networkConfig(1)
 	foreign := tcpRoute("sample-other", "default", types.UID("99999999-9999-9999-9999-999999999999"))
 	m, c := newManager(s, &foreign)
 
 	err := m.reconcileTCPRoutes(context.Background(), s,
-		[]sealsv1.Exposure{tcpExposure("direct", 6379)})
+		[]sigillumv1.Exposure{tcpExposure("direct", 6379)})
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"sample-direct", "sample-other"}, routeNames(t, c, "default"),
@@ -220,7 +220,7 @@ func TestReconcileTCPRoutes_LeavesAnotherSealsRouteAlone(t *testing.T) {
 // A route with no owner at all was written by hand. Deleting it is not this
 // controller's business.
 func TestReconcileTCPRoutes_LeavesAnUnownedRouteAlone(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	orphan := gwv1.TCPRoute{ObjectMeta: metav1.ObjectMeta{Name: "handmade", Namespace: "default"}}
 	m, c := newManager(s, &orphan)
 
@@ -233,16 +233,16 @@ func TestReconcileTCPRoutes_LeavesAnUnownedRouteAlone(t *testing.T) {
 // TCPRoutes are for TCP. An HTTP exposure gets an HTTPRoute elsewhere, and a
 // TCPRoute here as well would bind the same listener twice.
 func TestReconcileTCPRoutes_SkipsNonTCPExposures(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
-	web := sealsv1.Exposure{
+	web := sigillumv1.Exposure{
 		Name:     "web",
-		Protocol: sealsv1.ProtocolHTTP,
-		Backend:  sealsv1.Backend{Service: "redis", Port: 8080},
+		Protocol: sigillumv1.ProtocolHTTP,
+		Backend:  sigillumv1.Backend{Service: "redis", Port: 8080},
 	}
 
 	err := m.reconcileTCPRoutes(context.Background(), s,
-		[]sealsv1.Exposure{tcpExposure("direct", 6379), web})
+		[]sigillumv1.Exposure{tcpExposure("direct", 6379), web})
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"sample-direct"}, routeNames(t, c, "default"))
@@ -250,31 +250,31 @@ func TestReconcileTCPRoutes_SkipsNonTCPExposures(t *testing.T) {
 
 // An exposure that switched protocol keeps its old TCPRoute otherwise.
 func TestReconcileTCPRoutes_DeletesTheRouteOfAnExposureThatTurnedHTTP(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 	ctx := context.Background()
 
 	require.NoError(t, m.reconcileTCPRoutes(ctx, s,
-		[]sealsv1.Exposure{tcpExposure("direct", 6379)}))
+		[]sigillumv1.Exposure{tcpExposure("direct", 6379)}))
 
-	require.NoError(t, m.reconcileTCPRoutes(ctx, s, []sealsv1.Exposure{{
+	require.NoError(t, m.reconcileTCPRoutes(ctx, s, []sigillumv1.Exposure{{
 		Name:     "direct",
-		Protocol: sealsv1.ProtocolHTTP,
-		Backend:  sealsv1.Backend{Service: "redis", Port: 6379},
+		Protocol: sigillumv1.ProtocolHTTP,
+		Backend:  sigillumv1.Backend{Service: "redis", Port: 6379},
 	}}))
 
 	assert.Empty(t, routeNames(t, c, "default"))
 }
 
 // A build error is a caller bug. Writing the routes that did build would leave
-// the Seal half exposed.
+// the NetworkConfig half exposed.
 func TestReconcileTCPRoutes_ABadBackendIsAnErrorAndWritesNothing(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
-	broken := sealsv1.Exposure{Name: "admin", Protocol: sealsv1.ProtocolTCP}
+	broken := sigillumv1.Exposure{Name: "admin", Protocol: sigillumv1.ProtocolTCP}
 
 	err := m.reconcileTCPRoutes(context.Background(), s,
-		[]sealsv1.Exposure{tcpExposure("direct", 6379), broken})
+		[]sigillumv1.Exposure{tcpExposure("direct", 6379), broken})
 
 	require.Error(t, err)
 	assert.Empty(t, routeNames(t, c, "default"), "one bad exposure must not apply half the routes")
@@ -282,12 +282,12 @@ func TestReconcileTCPRoutes_ABadBackendIsAnErrorAndWritesNothing(t *testing.T) {
 
 // A build error must not read as "no exposures, delete everything".
 func TestReconcileTCPRoutes_ABadBackendDoesNotDeleteExistingRoutes(t *testing.T) {
-	s := seal(1)
-	existing := tcpRoute("sample-direct", "default", sealUID)
+	s := networkConfig(1)
+	existing := tcpRoute("sample-direct", "default", networkConfigUID)
 	m, c := newManager(s, &existing)
-	broken := sealsv1.Exposure{Name: "admin", Protocol: sealsv1.ProtocolTCP}
+	broken := sigillumv1.Exposure{Name: "admin", Protocol: sigillumv1.ProtocolTCP}
 
-	err := m.reconcileTCPRoutes(context.Background(), s, []sealsv1.Exposure{broken})
+	err := m.reconcileTCPRoutes(context.Background(), s, []sigillumv1.Exposure{broken})
 
 	require.Error(t, err)
 	assert.Equal(t, []string{"sample-direct"}, routeNames(t, c, "default"),
@@ -295,10 +295,10 @@ func TestReconcileTCPRoutes_ABadBackendDoesNotDeleteExistingRoutes(t *testing.T)
 }
 
 func TestReconcileTCPRoutes_ReapplyingTheSameExposuresIsStable(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 	ctx := context.Background()
-	want := []sealsv1.Exposure{tcpExposure("direct", 6379)}
+	want := []sigillumv1.Exposure{tcpExposure("direct", 6379)}
 
 	require.NoError(t, m.reconcileTCPRoutes(ctx, s, want))
 	require.NoError(t, m.reconcileTCPRoutes(ctx, s, want))
@@ -308,7 +308,7 @@ func TestReconcileTCPRoutes_ReapplyingTheSameExposuresIsStable(t *testing.T) {
 
 func TestBuildExposureStatus_ReadyTCPExposure(t *testing.T) {
 	got := buildExposureStatus(
-		sealsv1.Exposure{Name: "direct", Protocol: sealsv1.ProtocolTCP},
+		sigillumv1.Exposure{Name: "direct", Protocol: sigillumv1.ProtocolTCP},
 		"tcp", exposureResult{Shard: "tcp-0", Address: "172.19.0.200", Port: 30007, RouteReady: true},
 	)
 
@@ -323,7 +323,7 @@ func TestBuildExposureStatus_ReadyTCPExposure(t *testing.T) {
 
 func TestBuildExposureStatus_HTTPIsNotSupportedYet(t *testing.T) {
 	got := buildExposureStatus(
-		sealsv1.Exposure{Name: "api", Protocol: sealsv1.ProtocolHTTPS},
+		sigillumv1.Exposure{Name: "api", Protocol: sigillumv1.ProtocolHTTPS},
 		"public", exposureResult{},
 	)
 
@@ -334,7 +334,7 @@ func TestBuildExposureStatus_HTTPIsNotSupportedYet(t *testing.T) {
 
 func TestBuildExposureStatus_NoGatewayAddressYet(t *testing.T) {
 	got := buildExposureStatus(
-		sealsv1.Exposure{Name: "direct", Protocol: sealsv1.ProtocolTCP},
+		sigillumv1.Exposure{Name: "direct", Protocol: sigillumv1.ProtocolTCP},
 		"tcp", exposureResult{Shard: "tcp-0", Port: 30007, RouteReady: true},
 	)
 
@@ -347,7 +347,7 @@ func TestBuildExposureStatus_NoGatewayAddressYet(t *testing.T) {
 
 func TestBuildExposureStatus_RouteNotReadyCarriesTheRouteMessage(t *testing.T) {
 	got := buildExposureStatus(
-		sealsv1.Exposure{Name: "direct", Protocol: sealsv1.ProtocolTCP},
+		sigillumv1.Exposure{Name: "direct", Protocol: sigillumv1.ProtocolTCP},
 		"tcp", exposureResult{
 			Shard: "tcp-0", Address: "172.19.0.200", Port: 30007,
 			RouteMsg: "service redis not found",
@@ -360,7 +360,7 @@ func TestBuildExposureStatus_RouteNotReadyCarriesTheRouteMessage(t *testing.T) {
 
 func TestBuildExposureStatus_CarriesTheFailureMessage(t *testing.T) {
 	got := buildExposureStatus(
-		sealsv1.Exposure{Name: "direct", Protocol: sealsv1.ProtocolTCP},
+		sigillumv1.Exposure{Name: "direct", Protocol: sigillumv1.ProtocolTCP},
 		"", exposureResult{Err: errors.New("no shard in class tcp has capacity")},
 	)
 
@@ -370,7 +370,7 @@ func TestBuildExposureStatus_CarriesTheFailureMessage(t *testing.T) {
 
 func TestBuildExposureStatus_FailureWinsOverAReadyRoute(t *testing.T) {
 	got := buildExposureStatus(
-		sealsv1.Exposure{Name: "direct", Protocol: sealsv1.ProtocolTCP},
+		sigillumv1.Exposure{Name: "direct", Protocol: sigillumv1.ProtocolTCP},
 		"tcp", exposureResult{
 			Shard: "tcp-0", Address: "172.19.0.200", Port: 30007, RouteReady: true,
 			Err: errors.New("port 30007 still conflicts"),
@@ -383,7 +383,7 @@ func TestBuildExposureStatus_FailureWinsOverAReadyRoute(t *testing.T) {
 
 func TestBuildExposureStatus_CarriesTheConflictCount(t *testing.T) {
 	got := buildExposureStatus(
-		sealsv1.Exposure{Name: "direct", Protocol: sealsv1.ProtocolTCP},
+		sigillumv1.Exposure{Name: "direct", Protocol: sigillumv1.ProtocolTCP},
 		"tcp", exposureResult{Shard: "tcp-0", Port: 30007, ConflictCount: 2},
 	)
 
@@ -391,11 +391,11 @@ func TestBuildExposureStatus_CarriesTheConflictCount(t *testing.T) {
 }
 
 func readyOutcome(name string) exposureOutcome {
-	return exposureOutcome{Status: sealsv1.ExposureStatus{Name: name, Ready: true}}
+	return exposureOutcome{Status: sigillumv1.ExposureStatus{Name: name, Ready: true}}
 }
 
 func TestRollUp_NoExposuresKeepsDoneAndANilList(t *testing.T) {
-	done := phase{Phase: sealsv1.SealPhaseReady, Message: "networkpolicy applied"}
+	done := phase{Phase: sigillumv1.NetworkConfigPhaseReady, Message: "networkpolicy applied"}
 
 	got := rollUp(nil, done)
 
@@ -406,10 +406,10 @@ func TestRollUp_NoExposuresKeepsDoneAndANilList(t *testing.T) {
 func TestRollUp_AllReadyIsDone(t *testing.T) {
 	got := rollUp(
 		[]exposureOutcome{readyOutcome("a"), readyOutcome("b")},
-		phase{Phase: sealsv1.SealPhaseReady, Message: "networkpolicy applied"},
+		phase{Phase: sigillumv1.NetworkConfigPhaseReady, Message: "networkpolicy applied"},
 	)
 
-	assert.Equal(t, sealsv1.SealPhaseReady, got.Phase)
+	assert.Equal(t, sigillumv1.NetworkConfigPhaseReady, got.Phase)
 	assert.Equal(t, "networkpolicy applied", got.Message)
 	require.Len(t, got.Exposures, 2)
 	assert.Equal(t, "a", got.Exposures[0].Name)
@@ -417,40 +417,40 @@ func TestRollUp_AllReadyIsDone(t *testing.T) {
 }
 
 func TestRollUp_WaitingIsPending(t *testing.T) {
-	waiting := exposureOutcome{Status: sealsv1.ExposureStatus{Name: "b", Message: "waiting for gateway address"}}
+	waiting := exposureOutcome{Status: sigillumv1.ExposureStatus{Name: "b", Message: "waiting for gateway address"}}
 
 	got := rollUp(
 		[]exposureOutcome{readyOutcome("a"), waiting},
-		phase{Phase: sealsv1.SealPhaseReady},
+		phase{Phase: sigillumv1.NetworkConfigPhaseReady},
 	)
 
-	assert.Equal(t, sealsv1.SealPhasePending, got.Phase)
+	assert.Equal(t, sigillumv1.NetworkConfigPhasePending, got.Phase)
 	assert.Equal(t, `exposure "b": waiting for gateway address`, got.Message)
 }
 
 func TestRollUp_FailedBeatsWaitingAndNamesTheFirstFailure(t *testing.T) {
-	waiting := exposureOutcome{Status: sealsv1.ExposureStatus{Name: "a", Message: "waiting for gateway address"}}
-	first := exposureOutcome{Status: sealsv1.ExposureStatus{Name: "b", Message: "no shard has room"}, Failed: true}
-	second := exposureOutcome{Status: sealsv1.ExposureStatus{Name: "c", Message: "other"}, Failed: true}
+	waiting := exposureOutcome{Status: sigillumv1.ExposureStatus{Name: "a", Message: "waiting for gateway address"}}
+	first := exposureOutcome{Status: sigillumv1.ExposureStatus{Name: "b", Message: "no shard has room"}, Failed: true}
+	second := exposureOutcome{Status: sigillumv1.ExposureStatus{Name: "c", Message: "other"}, Failed: true}
 
 	got := rollUp(
 		[]exposureOutcome{waiting, first, second},
-		phase{Phase: sealsv1.SealPhaseReady},
+		phase{Phase: sigillumv1.NetworkConfigPhaseReady},
 	)
 
-	assert.Equal(t, sealsv1.SealPhaseFailed, got.Phase)
+	assert.Equal(t, sigillumv1.NetworkConfigPhaseFailed, got.Phase)
 	assert.Equal(t, `exposure "b": no shard has room`, got.Message)
 }
 
 func TestRollUp_WaitingDoesNotHideAFailedPolicy(t *testing.T) {
-	waiting := exposureOutcome{Status: sealsv1.ExposureStatus{Name: "a", Message: "waiting for gateway address"}}
+	waiting := exposureOutcome{Status: sigillumv1.ExposureStatus{Name: "a", Message: "waiting for gateway address"}}
 
 	got := rollUp(
 		[]exposureOutcome{waiting},
-		phase{Phase: sealsv1.SealPhaseFailed, Message: "reconciling network policy: boom"},
+		phase{Phase: sigillumv1.NetworkConfigPhaseFailed, Message: "reconciling network policy: boom"},
 	)
 
-	assert.Equal(t, sealsv1.SealPhaseFailed, got.Phase)
+	assert.Equal(t, sigillumv1.NetworkConfigPhaseFailed, got.Phase)
 	assert.Equal(t, "reconciling network policy: boom", got.Message)
 	require.Len(t, got.Exposures, 1)
 }
@@ -470,7 +470,7 @@ func readSetNamed(t *testing.T, c client.Client, name string) (*gwv1.ListenerSet
 	return obj, true
 }
 
-// ownedSetNames lists the names of the ListenerSets the test Seal controls,
+// ownedSetNames lists the names of the ListenerSets the test NetworkConfig controls,
 // sorted.
 func ownedSetNames(t *testing.T, c client.Client) []string {
 	t.Helper()
@@ -480,7 +480,7 @@ func ownedSetNames(t *testing.T, c client.Client) []string {
 
 	names := []string{}
 	for i := range list.Items {
-		if metav1.IsControlledBy(&list.Items[i], seal(1)) {
+		if metav1.IsControlledBy(&list.Items[i], networkConfig(1)) {
 			names = append(names, list.Items[i].GetName())
 		}
 	}
@@ -505,7 +505,7 @@ func directSet(t *testing.T, port int64, conds ...metav1.Condition) *gwv1.Listen
 }
 
 func TestReconcileListenerSets_AppliesOneSetPerExposure(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 
 	err := m.reconcileListenerSets(context.Background(), s,
@@ -516,7 +516,7 @@ func TestReconcileListenerSets_AppliesOneSetPerExposure(t *testing.T) {
 }
 
 func TestReconcileListenerSets_EachSetHoldsOneListenerNamedAfterTheExposure(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 
 	err := m.reconcileListenerSets(context.Background(), s,
@@ -533,7 +533,7 @@ func TestReconcileListenerSets_EachSetHoldsOneListenerNamedAfterTheExposure(t *t
 }
 
 func TestReconcileListenerSets_EachSetHasItsOwnShard(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 
 	err := m.reconcileListenerSets(context.Background(), s,
@@ -554,10 +554,10 @@ func TestReconcileListenerSets_EachSetHasItsOwnShard(t *testing.T) {
 	assert.Equal(t, tcpRef("tcp-1"), got)
 }
 
-// Without blockOwnerDeletion the listener outlives the Seal and its port stays
+// Without blockOwnerDeletion the listener outlives the NetworkConfig and its port stays
 // claimed forever.
 func TestReconcileListenerSets_SetsTheControllerOwnerReference(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 
 	require.NoError(t, m.reconcileListenerSets(context.Background(), s,
@@ -568,15 +568,15 @@ func TestReconcileListenerSets_SetsTheControllerOwnerReference(t *testing.T) {
 
 	refs := obj.GetOwnerReferences()
 	require.Len(t, refs, 1)
-	assert.Equal(t, "Seal", refs[0].Kind)
+	assert.Equal(t, "NetworkConfig", refs[0].Kind)
 	assert.Equal(t, "sample", refs[0].Name)
-	assert.Equal(t, sealUID, refs[0].UID)
+	assert.Equal(t, networkConfigUID, refs[0].UID)
 	assert.True(t, *refs[0].Controller)
 	assert.True(t, *refs[0].BlockOwnerDeletion)
 }
 
 func TestReconcileListenerSets_DeletesTheSetOfADroppedExposure(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 	ctx := context.Background()
 
@@ -589,9 +589,9 @@ func TestReconcileListenerSets_DeletesTheSetOfADroppedExposure(t *testing.T) {
 		"a dropped exposure's set must go, or its port stays taken")
 }
 
-// This is the upgrade path from one set per Seal.
-func TestReconcileListenerSets_DeletesTheOldSealNamedSet(t *testing.T) {
-	s := seal(1)
+// This is the upgrade path from one set per NetworkConfig.
+func TestReconcileListenerSets_DeletesTheOldNetworkConfigNamedSet(t *testing.T) {
+	s := networkConfig(1)
 	m, c := newManager(s, ownedSet(t, "sample", "direct", "tcp-0", 30007))
 
 	require.NoError(t, m.reconcileListenerSets(context.Background(), s,
@@ -603,7 +603,7 @@ func TestReconcileListenerSets_DeletesTheOldSealNamedSet(t *testing.T) {
 // A kept set belongs to an exposure whose class is gone or that gave up on
 // conflicts. Its live traffic must survive.
 func TestReconcileListenerSets_KeepsASetMarkedKeep(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s, directSet(t, 30007))
 
 	require.NoError(t, m.reconcileListenerSets(context.Background(), s,
@@ -616,7 +616,7 @@ func TestReconcileListenerSets_KeepsASetMarkedKeep(t *testing.T) {
 // spec.listeners requires at least one entry, so there is no such thing as an
 // empty ListenerSet to apply.
 func TestReconcileListenerSets_NothingWantedDeletesEveryOwnedSet(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s, directSet(t, 30007), ownedSet(t, "sample-admin", "admin", "tcp-0", 30008))
 
 	require.NoError(t, m.reconcileListenerSets(context.Background(), s, nil, nil))
@@ -625,19 +625,19 @@ func TestReconcileListenerSets_NothingWantedDeletesEveryOwnedSet(t *testing.T) {
 }
 
 func TestReconcileListenerSets_NothingWantedAndNothingOwnedIsNotAnError(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 
 	require.NoError(t, m.reconcileListenerSets(context.Background(), s, nil, nil))
 	assert.Empty(t, ownedSetNames(t, c))
 }
 
-func TestReconcileListenerSets_LeavesAnotherSealsSetAlone(t *testing.T) {
-	s := seal(1)
+func TestReconcileListenerSets_LeavesAnotherNetworkConfigsSetAlone(t *testing.T) {
+	s := networkConfig(1)
 	other := ownedSet(t, "other-direct", "direct", "tcp-0", 30009)
 	other.SetOwnerReferences([]metav1.OwnerReference{{
-		APIVersion: sealsv1.GroupVersion.String(),
-		Kind:       "Seal",
+		APIVersion: sigillumv1.GroupVersion.String(),
+		Kind:       "NetworkConfig",
 		Name:       "other",
 		UID:        types.UID("99999999-2222-3333-4444-555555555555"),
 		Controller: ptr.To(true),
@@ -651,7 +651,7 @@ func TestReconcileListenerSets_LeavesAnotherSealsSetAlone(t *testing.T) {
 }
 
 func TestReconcileListenerSets_LeavesAnUnownedSetAlone(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	unowned := listenerSet(t, "handmade", "default", "tcp-0", 30009)
 	m, c := newManager(s, &unowned)
 
@@ -662,7 +662,7 @@ func TestReconcileListenerSets_LeavesAnUnownedSetAlone(t *testing.T) {
 }
 
 func TestReconcileListenerSets_ReapplyingIsStable(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 	ctx := context.Background()
 	sets := []wantSet{want("direct", "tcp-0", 30007)}
@@ -672,12 +672,12 @@ func TestReconcileListenerSets_ReapplyingIsStable(t *testing.T) {
 
 	assert.Equal(t, []string{"sample-direct"}, ownedSetNames(t, c))
 	assert.EqualValues(t, 30007, exposurePort(t, c, "direct"),
-		"a settled Seal must not churn its own published ports")
+		"a settled NetworkConfig must not churn its own published ports")
 }
 
 // A bad port is a caller bug. Nothing may be written, not even the good sets.
 func TestReconcileListenerSets_ABadPortIsAnErrorAndWritesNothing(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s)
 
 	err := m.reconcileListenerSets(context.Background(), s,
@@ -689,7 +689,7 @@ func TestReconcileListenerSets_ABadPortIsAnErrorAndWritesNothing(t *testing.T) {
 
 // Deleting would take live addresses down over a caller bug.
 func TestReconcileListenerSets_ABadPortDoesNotDeleteExistingSets(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, c := newManager(s, directSet(t, 30007))
 
 	err := m.reconcileListenerSets(context.Background(), s,
@@ -699,22 +699,22 @@ func TestReconcileListenerSets_ABadPortDoesNotDeleteExistingSets(t *testing.T) {
 	assert.Equal(t, []string{"sample-direct"}, ownedSetNames(t, c))
 }
 
-func TestOwnedSets_KeepsOnlyTheSealsSets(t *testing.T) {
+func TestOwnedSets_KeepsOnlyTheNetworkConfigsSets(t *testing.T) {
 	mine := directSet(t, 30007)
 	other := listenerSet(t, "handmade", "default", "tcp-0", 30009)
 
-	got := ownedSets([]gwv1.ListenerSet{*mine, other}, seal(1))
+	got := ownedSets([]gwv1.ListenerSet{*mine, other}, networkConfig(1))
 
 	require.Len(t, got, 1)
 	assert.Contains(t, got, "sample-direct")
 }
 
 func TestOwnedSets_EmptyInput(t *testing.T) {
-	assert.Empty(t, ownedSets(nil, seal(1)))
+	assert.Empty(t, ownedSets(nil, networkConfig(1)))
 }
 
-func TestReadOwnedSets_ListsOnlyTheSealsSetsInItsNamespace(t *testing.T) {
-	s := seal(1)
+func TestReadOwnedSets_ListsOnlyTheNetworkConfigsSetsInItsNamespace(t *testing.T) {
+	s := networkConfig(1)
 	elsewhere := ownedSet(t, "sample-admin", "admin", "tcp-0", 30008)
 	elsewhere.SetNamespace("other-ns")
 	unowned := listenerSet(t, "handmade", "default", "tcp-0", 30009)
@@ -728,7 +728,7 @@ func TestReadOwnedSets_ListsOnlyTheSealsSetsInItsNamespace(t *testing.T) {
 }
 
 func TestReadOwnedSets_NoSetsIsAnEmptyMap(t *testing.T) {
-	s := seal(1)
+	s := networkConfig(1)
 	m, _ := newManager(s)
 
 	got, err := readOwnedSets(context.Background(), m.Client, s)

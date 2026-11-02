@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.22.0
-  name: exposureclasses.seals.helmetica.io
+  name: exposureclasses.sigillum.helmetica.io
 spec:
-  group: seals.helmetica.io
+  group: sigillum.helmetica.io
   names:
     kind: ExposureClass
     listKind: ExposureClassList

@@ -9,19 +9,19 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
+	sigillumv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 )
 
 const shardPoolLabel = "sigillum.io/shard-pool"
 
 // tcpClass is a TCP ExposureClass with a shard pool selector and a port range.
-func tcpClass(maxPerShard int32) *sealsv1.ExposureClass {
-	c := class("tcp", sealsv1.ProtocolTCP)
+func tcpClass(maxPerShard int32) *sigillumv1.ExposureClass {
+	c := class("tcp", sigillumv1.ProtocolTCP)
 	c.Spec.ShardSelector = &metav1.LabelSelector{
 		MatchLabels: map[string]string{shardPoolLabel: "tcp"},
 	}
-	c.Spec.PortRange = &sealsv1.PortRange{From: 30000, To: 30255}
+	c.Spec.PortRange = &sigillumv1.PortRange{From: 30000, To: 30255}
 	c.Spec.MaxListenersPerShard = maxPerShard
 
 	return &c
@@ -292,7 +292,7 @@ func TestPlaceExposure_EveryShardFullIsAnError(t *testing.T) {
 	assert.Contains(t, err.Error(), "tcp-1")
 }
 
-// Creating gateways is out of scope, so the Seal's owner cannot fix this. The
+// Creating gateways is out of scope, so the NetworkConfig's owner cannot fix this. The
 // message is the only place they find out who can.
 func TestPlaceExposure_ExhaustionMessageNamesTheActionRequired(t *testing.T) {
 	shards := []gatewayapi.ShardRef{tcpRef("tcp-0")}
@@ -304,7 +304,7 @@ func TestPlaceExposure_ExhaustionMessageNamesTheActionRequired(t *testing.T) {
 	assert.Contains(t, err.Error(), "tcp", "the class must be named")
 	assert.Contains(t, err.Error(), "64", "the count tells the operator how full is full")
 	assert.Contains(t, err.Error(), "platform operator",
-		"the seal's owner cannot create gateways, so the message must say who can")
+		"the network config's owner cannot create gateways, so the message must say who can")
 	assert.Contains(t, err.Error(), shardPoolLabel,
 		"naming the label turns the message into an instruction")
 }

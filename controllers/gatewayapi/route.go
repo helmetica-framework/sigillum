@@ -31,7 +31,7 @@ type Backend struct {
 //
 // It errors rather than writing a route the gateway controller would reject.
 func BuildTCPRoute(
-	sealName, namespace, exposureName string,
+	networkConfigName, namespace, exposureName string,
 	backend Backend,
 	owner *metav1ac.OwnerReferenceApplyConfiguration,
 ) (*gwac.TCPRouteApplyConfiguration, error) {
@@ -44,13 +44,13 @@ func BuildTCPRoute(
 			exposureName, backend.Port, maxPort)
 	}
 
-	return gwac.TCPRoute(RouteName(sealName, exposureName), namespace).
+	return gwac.TCPRoute(RouteName(networkConfigName, exposureName), namespace).
 		WithOwnerReferences(owner).
 		WithSpec(gwac.TCPRouteSpec().
 			WithParentRefs(gwac.ParentReference().
 				WithGroup(gwv1.GroupName).
 				WithKind("ListenerSet").
-				WithName(gwv1.ObjectName(ListenerSetName(sealName, exposureName))).
+				WithName(gwv1.ObjectName(ListenerSetName(networkConfigName, exposureName))).
 				WithSectionName(gwv1.SectionName(exposureName))).
 			WithRules(gwac.TCPRouteRule().
 				WithBackendRefs(gwac.BackendRef().
@@ -60,11 +60,11 @@ func BuildTCPRoute(
 
 // RouteName is the name of the TCPRoute for one exposure.
 //
-// Seal and exposure names are each valid on their own but can exceed the object
+// NetworkConfig and exposure names are each valid on their own but can exceed the object
 // name limit once joined, so a long result is truncated and given a hash suffix
 // to keep it unique.
-func RouteName(sealName, exposureName string) string {
-	name := sealName + "-" + exposureName
+func RouteName(networkConfigName, exposureName string) string {
+	name := networkConfigName + "-" + exposureName
 	if len(name) <= maxNameLength {
 		return name
 	}

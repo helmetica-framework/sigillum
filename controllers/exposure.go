@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
+	sigillumv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,7 +18,7 @@ import (
 // "broken" from "waiting on the gateway controller", which both have
 // Ready false.
 type exposureOutcome struct {
-	Status sealsv1.ExposureStatus
+	Status sigillumv1.ExposureStatus
 	Failed bool
 }
 
@@ -34,18 +34,18 @@ type exposureResult struct {
 	Err           error
 }
 
-// reconcileTCPRoutes drives this Seal's TCPRoutes to match exposures: one route
+// reconcileTCPRoutes drives this NetworkConfig's TCPRoutes to match exposures: one route
 // per exposure, and nothing left over.
 //
 // Deleting the leftovers is what makes a rename work. A renamed exposure is a
 // new name, so it gets a new route and the old one has to go, or it keeps
 // pointing at a listener that no longer exists.
-func (r *SealManager) reconcileTCPRoutes(
+func (r *NetworkConfigManager) reconcileTCPRoutes(
 	ctx context.Context,
-	seal *sealsv1.Seal,
-	exposures []sealsv1.Exposure,
+	networkConfig *sigillumv1.NetworkConfig,
+	exposures []sigillumv1.Exposure,
 ) error {
-	owner, err := controllerRef(seal, r.Scheme)
+	owner, err := controllerRef(networkConfig, r.Scheme)
 	if err != nil {
 		return fmt.Errorf("building owner reference: %w", err)
 	}
@@ -55,13 +55,13 @@ func (r *SealManager) reconcileTCPRoutes(
 	var routes []*gwac.TCPRouteApplyConfiguration
 
 	for _, e := range exposures {
-		if e.Protocol != sealsv1.ProtocolTCP {
+		if e.Protocol != sigillumv1.ProtocolTCP {
 			continue
 		}
 
 		backend := gatewayapi.Backend{Service: e.Backend.Service, Port: e.Backend.Port}
 
-		route, err := gatewayapi.BuildTCPRoute(seal.GetName(), seal.GetNamespace(), e.Name, backend, owner)
+		route, err := gatewayapi.BuildTCPRoute(networkConfig.GetName(), networkConfig.GetNamespace(), e.Name, backend, owner)
 		if err != nil {
 			return fmt.Errorf("building tcproute: %w", err)
 		}
@@ -82,13 +82,13 @@ func (r *SealManager) reconcileTCPRoutes(
 
 	routeList := &gwv1.TCPRouteList{}
 
-	err = r.List(ctx, routeList, &client.ListOptions{Namespace: seal.GetNamespace()})
+	err = r.List(ctx, routeList, &client.ListOptions{Namespace: networkConfig.GetNamespace()})
 	if err != nil {
 		return fmt.Errorf("listing tcproutes: %w", err)
 	}
 
 	for _, route := range routeList.Items {
-		if !metav1.IsControlledBy(&route, seal) {
+		if !metav1.IsControlledBy(&route, networkConfig) {
 			continue
 		}
 
@@ -108,8 +108,8 @@ func (r *SealManager) reconcileTCPRoutes(
 //
 // A missing gateway address gives no URL at all: "tcp://:30007" looks like a
 // working address and is not one.
-func buildExposureStatus(e sealsv1.Exposure, class string, res exposureResult) sealsv1.ExposureStatus {
-	st := sealsv1.ExposureStatus{
+func buildExposureStatus(e sigillumv1.Exposure, class string, res exposureResult) sigillumv1.ExposureStatus {
+	st := sigillumv1.ExposureStatus{
 		Name:          e.Name,
 		Class:         class,
 		Shard:         res.Shard,
@@ -125,7 +125,7 @@ func buildExposureStatus(e sealsv1.Exposure, class string, res exposureResult) s
 	switch {
 	case res.Err != nil:
 		st.Message = res.Err.Error()
-	case e.Protocol != sealsv1.ProtocolTCP:
+	case e.Protocol != sigillumv1.ProtocolTCP:
 		st.Message = fmt.Sprintf("protocol %s is not supported yet", e.Protocol)
 	case res.Address == "":
 		st.Message = "waiting for gateway address"
@@ -138,7 +138,7 @@ func buildExposureStatus(e sealsv1.Exposure, class string, res exposureResult) s
 	return st
 }
 
-// rollUp sets the Seal phase from its exposures. done is the phase to report
+// rollUp sets the NetworkConfig phase from its exposures. done is the phase to report
 // when every exposure is ready. A failed exposure beats a failed done, and a
 // waiting exposure beats only a ready one.
 func rollUp(outcomes []exposureOutcome, done phase) phase {
@@ -146,26 +146,26 @@ func rollUp(outcomes []exposureOutcome, done phase) phase {
 		return done
 	}
 
-	done.Exposures = make([]sealsv1.ExposureStatus, len(outcomes))
+	done.Exposures = make([]sigillumv1.ExposureStatus, len(outcomes))
 	for i, o := range outcomes {
 		done.Exposures[i] = o.Status
 	}
 
 	for _, o := range outcomes {
 		if o.Failed {
-			done.Phase = sealsv1.SealPhaseFailed
+			done.Phase = sigillumv1.NetworkConfigPhaseFailed
 			done.Message = fmt.Sprintf("exposure %q: %s", o.Status.Name, o.Status.Message)
 			return done
 		}
 	}
 
-	if done.Phase != sealsv1.SealPhaseReady {
+	if done.Phase != sigillumv1.NetworkConfigPhaseReady {
 		return done
 	}
 
 	for _, o := range outcomes {
 		if !o.Status.Ready {
-			done.Phase = sealsv1.SealPhasePending
+			done.Phase = sigillumv1.NetworkConfigPhasePending
 			done.Message = fmt.Sprintf("exposure %q: %s", o.Status.Name, o.Status.Message)
 			return done
 		}
@@ -174,30 +174,30 @@ func rollUp(outcomes []exposureOutcome, done phase) phase {
 	return done
 }
 
-// reconcileExposures drives the ListenerSets and TCPRoutes for seal's
+// reconcileExposures drives the ListenerSets and TCPRoutes for network config's
 // exposures and reports one outcome per exposure, in spec order.
 //
 // The error is for problems a retry might fix. Everything else is only
 // reported in the returned statuses.
-func (r *SealManager) reconcileExposures(
+func (r *NetworkConfigManager) reconcileExposures(
 	ctx context.Context,
-	seal *sealsv1.Seal,
-	classes []sealsv1.ExposureClass,
+	networkConfig *sigillumv1.NetworkConfig,
+	classes []sigillumv1.ExposureClass,
 ) ([]exposureOutcome, error) {
 	const resolving = "resolving exposure class"
 
-	outcomes := make([]exposureOutcome, len(seal.Spec.Expose))
-	for i, e := range seal.Spec.Expose {
+	outcomes := make([]exposureOutcome, len(networkConfig.Spec.Expose))
+	for i, e := range networkConfig.Spec.Expose {
 		outcomes[i] = exposureOutcome{
-			Status: sealsv1.ExposureStatus{
+			Status: sigillumv1.ExposureStatus{
 				Name:    e.Name,
 				Message: resolving,
 			},
 		}
 	}
 
-	prev := map[string]sealsv1.ExposureStatus{}
-	for _, st := range seal.Status.Exposures {
+	prev := map[string]sigillumv1.ExposureStatus{}
+	for _, st := range networkConfig.Status.Exposures {
 		prev[st.Name] = st
 	}
 
@@ -218,16 +218,16 @@ func (r *SealManager) reconcileExposures(
 	// classOf stays nil for every exposure that does not go on to placement.
 	// keepAsIs marks exposures whose class is gone or whose port gave up on
 	// conflicts: their listener and route must survive untouched.
-	classOf := make([]*sealsv1.ExposureClass, len(seal.Spec.Expose))
-	keepAsIs := make([]bool, len(seal.Spec.Expose))
+	classOf := make([]*sigillumv1.ExposureClass, len(networkConfig.Spec.Expose))
+	keepAsIs := make([]bool, len(networkConfig.Spec.Expose))
 
-	for i, e := range seal.Spec.Expose {
+	for i, e := range networkConfig.Spec.Expose {
 		name := e.ExposureClass
 		if name == "" {
 			name = defaultClassName(e.Protocol)
 		}
 
-		if e.Protocol != sealsv1.ProtocolTCP {
+		if e.Protocol != sigillumv1.ProtocolTCP {
 			outcomes[i] = exposureOutcome{
 				Status: buildExposureStatus(e, name, exposureResult{}),
 				Failed: true,
@@ -252,28 +252,28 @@ func (r *SealManager) reconcileExposures(
 		}
 	}
 
-	own, err := readOwnedSets(ctx, r.Client, seal)
+	own, err := readOwnedSets(ctx, r.Client, networkConfig)
 	if err != nil {
 		return fail(err)
 	}
 
 	// A conflict in the cache can be old. Check it live before moving a port.
 	if hasConflict(own) {
-		own, err = readOwnedSets(ctx, r.APIReader, seal)
+		own, err = readOwnedSets(ctx, r.APIReader, networkConfig)
 		if err != nil {
 			return fail(err)
 		}
 	}
 
-	mustMove := make([]bool, len(seal.Spec.Expose))
-	counts := make([]int32, len(seal.Spec.Expose))
+	mustMove := make([]bool, len(networkConfig.Spec.Expose))
+	counts := make([]int32, len(networkConfig.Spec.Expose))
 
-	for i, e := range seal.Spec.Expose {
+	for i, e := range networkConfig.Spec.Expose {
 		if classOf[i] == nil {
 			continue
 		}
 
-		set := exposureSet(own, seal, e.Name)
+		set := exposureSet(own, networkConfig, e.Name)
 		port, has := listenerPort(set, e.Name)
 		if !has {
 			continue // new exposure, placement gives it a port
@@ -304,7 +304,7 @@ func (r *SealManager) reconcileExposures(
 	shardsOf := map[string][]gatewayapi.ShardRef{}
 	needPort := false
 
-	for i, e := range seal.Spec.Expose {
+	for i, e := range networkConfig.Spec.Expose {
 		if classOf[i] == nil {
 			continue
 		}
@@ -318,7 +318,7 @@ func (r *SealManager) reconcileExposures(
 			shardsOf[name] = shards
 		}
 
-		set := exposureSet(own, seal, e.Name)
+		set := exposureSet(own, networkConfig, e.Name)
 		_, has := listenerPort(set, e.Name)
 		_, sticky := stickyShard(set, shardsOf[name])
 		if !has || mustMove[i] || !sticky {
@@ -335,12 +335,12 @@ func (r *SealManager) reconcileExposures(
 		}
 
 		// The cache may not have seen the sets written a moment ago.
-		own = ownedSets(sets, seal)
+		own = ownedSets(sets, networkConfig)
 	}
 
 	p := newPlacer(sets)
-	res := make([]exposureResult, len(seal.Spec.Expose))
-	placed := make([]gatewayapi.ShardRef, len(seal.Spec.Expose))
+	res := make([]exposureResult, len(networkConfig.Spec.Expose))
+	placed := make([]gatewayapi.ShardRef, len(networkConfig.Spec.Expose))
 	var (
 		wants    []wantSet
 		placeErr error
@@ -348,19 +348,19 @@ func (r *SealManager) reconcileExposures(
 
 	failOne := func(i int, err error) {
 		outcomes[i] = exposureOutcome{
-			Status: buildExposureStatus(seal.Spec.Expose[i], classOf[i].GetName(), exposureResult{Err: err}),
+			Status: buildExposureStatus(networkConfig.Spec.Expose[i], classOf[i].GetName(), exposureResult{Err: err}),
 			Failed: true,
 		}
 		classOf[i] = nil
 	}
 
-	for i, e := range seal.Spec.Expose {
+	for i, e := range networkConfig.Spec.Expose {
 		class := classOf[i]
 		if class == nil {
 			continue
 		}
 
-		set := exposureSet(own, seal, e.Name)
+		set := exposureSet(own, networkConfig, e.Name)
 		shards := shardsOf[class.GetName()]
 
 		shard, sticky := stickyShard(set, shards)
@@ -403,10 +403,10 @@ func (r *SealManager) reconcileExposures(
 
 	var (
 		keep   []string
-		routed []sealsv1.Exposure
+		routed []sigillumv1.Exposure
 	)
-	for i, e := range seal.Spec.Expose {
-		_, has := listenerPort(exposureSet(own, seal, e.Name), e.Name)
+	for i, e := range networkConfig.Spec.Expose {
+		_, has := listenerPort(exposureSet(own, networkConfig, e.Name), e.Name)
 		if keepAsIs[i] && has {
 			keep = append(keep, e.Name)
 		}
@@ -415,10 +415,10 @@ func (r *SealManager) reconcileExposures(
 		}
 	}
 
-	if err := r.reconcileListenerSets(ctx, seal, wants, keep); err != nil {
+	if err := r.reconcileListenerSets(ctx, networkConfig, wants, keep); err != nil {
 		return fail(err)
 	}
-	if err := r.reconcileTCPRoutes(ctx, seal, routed); err != nil {
+	if err := r.reconcileTCPRoutes(ctx, networkConfig, routed); err != nil {
 		return fail(err)
 	}
 
@@ -436,13 +436,13 @@ func (r *SealManager) reconcileExposures(
 		addrOf[w.Parent], _ = gatewayapi.GatewayAddress(gw)
 	}
 
-	for i, e := range seal.Spec.Expose {
+	for i, e := range networkConfig.Spec.Expose {
 		if classOf[i] == nil {
 			continue
 		}
 
 		route := &gwv1.TCPRoute{}
-		key := client.ObjectKey{Namespace: seal.GetNamespace(), Name: gatewayapi.RouteName(seal.GetName(), e.Name)}
+		key := client.ObjectKey{Namespace: networkConfig.GetNamespace(), Name: gatewayapi.RouteName(networkConfig.GetName(), e.Name)}
 		err := r.Get(ctx, key, route)
 		if apierrors.IsNotFound(err) {
 			route = nil
@@ -510,16 +510,16 @@ type wantSet struct {
 	Port     int32
 }
 
-// reconcileListenerSets drives the Seal's ListenerSets to match want: one set
+// reconcileListenerSets drives the NetworkConfig's ListenerSets to match want: one set
 // per exposure, and nothing left over. The sets of exposures named in keep
 // are left as they are.
-func (r *SealManager) reconcileListenerSets(
+func (r *NetworkConfigManager) reconcileListenerSets(
 	ctx context.Context,
-	seal *sealsv1.Seal,
+	networkConfig *sigillumv1.NetworkConfig,
 	want []wantSet,
 	keep []string,
 ) error {
-	owner, err := controllerRef(seal, r.Scheme)
+	owner, err := controllerRef(networkConfig, r.Scheme)
 	if err != nil {
 		return fmt.Errorf("building owner reference: %w", err)
 	}
@@ -530,8 +530,8 @@ func (r *SealManager) reconcileListenerSets(
 
 	for _, w := range want {
 		set, err := gatewayapi.BuildListenerSet(
-			gatewayapi.ListenerSetName(seal.GetName(), w.Exposure),
-			seal.GetNamespace(),
+			gatewayapi.ListenerSetName(networkConfig.GetName(), w.Exposure),
+			networkConfig.GetNamespace(),
 			w.Parent,
 			[]gatewayapi.Listener{{Name: w.Exposure, Protocol: "TCP", Port: w.Port}},
 			owner,
@@ -556,10 +556,10 @@ func (r *SealManager) reconcileListenerSets(
 
 	kept := make(map[string]bool, len(keep))
 	for _, name := range keep {
-		kept[gatewayapi.ListenerSetName(seal.GetName(), name)] = true
+		kept[gatewayapi.ListenerSetName(networkConfig.GetName(), name)] = true
 	}
 
-	owned, err := readOwnedSets(ctx, r.Client, seal)
+	owned, err := readOwnedSets(ctx, r.Client, networkConfig)
 	if err != nil {
 		return err
 	}
@@ -577,12 +577,12 @@ func (r *SealManager) reconcileListenerSets(
 	return nil
 }
 
-// ownedSets picks the sets seal controls out of sets, keyed by name.
-func ownedSets(sets []gwv1.ListenerSet, seal *sealsv1.Seal) map[string]*gwv1.ListenerSet {
+// ownedSets picks the sets network config controls out of sets, keyed by name.
+func ownedSets(sets []gwv1.ListenerSet, networkConfig *sigillumv1.NetworkConfig) map[string]*gwv1.ListenerSet {
 	owned := map[string]*gwv1.ListenerSet{}
 
 	for i := range sets {
-		if metav1.IsControlledBy(&sets[i], seal) {
+		if metav1.IsControlledBy(&sets[i], networkConfig) {
 			owned[sets[i].GetName()] = &sets[i]
 		}
 	}
@@ -590,22 +590,22 @@ func ownedSets(sets []gwv1.ListenerSet, seal *sealsv1.Seal) map[string]*gwv1.Lis
 	return owned
 }
 
-// readOwnedSets lists the sets in the Seal's namespace and keeps the ones the
-// Seal controls, keyed by name.
-func readOwnedSets(ctx context.Context, reader client.Reader, seal *sealsv1.Seal) (map[string]*gwv1.ListenerSet, error) {
+// readOwnedSets lists the sets in the NetworkConfig's namespace and keeps the ones the
+// NetworkConfig controls, keyed by name.
+func readOwnedSets(ctx context.Context, reader client.Reader, networkConfig *sigillumv1.NetworkConfig) (map[string]*gwv1.ListenerSet, error) {
 	list := &gwv1.ListenerSetList{}
 
-	err := reader.List(ctx, list, client.InNamespace(seal.GetNamespace()))
+	err := reader.List(ctx, list, client.InNamespace(networkConfig.GetNamespace()))
 	if err != nil {
 		return nil, fmt.Errorf("listing own listenersets: %w", err)
 	}
 
-	return ownedSets(list.Items, seal), nil
+	return ownedSets(list.Items, networkConfig), nil
 }
 
 // exposureSet picks the set of exposure out of own. Nil means none.
-func exposureSet(own map[string]*gwv1.ListenerSet, seal *sealsv1.Seal, exposure string) *gwv1.ListenerSet {
-	return own[gatewayapi.ListenerSetName(seal.GetName(), exposure)]
+func exposureSet(own map[string]*gwv1.ListenerSet, networkConfig *sigillumv1.NetworkConfig, exposure string) *gwv1.ListenerSet {
+	return own[gatewayapi.ListenerSetName(networkConfig.GetName(), exposure)]
 }
 
 // hasConflict reports whether any listener on sets is Conflicted.

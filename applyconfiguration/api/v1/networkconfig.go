@@ -11,75 +11,75 @@ import (
 	metav1 "k8s.io/client-go/applyconfigurations/meta/v1"
 )
 
-// SealApplyConfiguration represents a declarative configuration of the Seal type for use
+// NetworkConfigApplyConfiguration represents a declarative configuration of the NetworkConfig type for use
 // with apply.
 //
-// Seal is sigillum's placeholder resource.
-type SealApplyConfiguration struct {
+// NetworkConfig is sigillum's placeholder resource.
+type NetworkConfigApplyConfiguration struct {
 	metav1.TypeMetaApplyConfiguration    `json:""`
 	*metav1.ObjectMetaApplyConfiguration `json:"metadata,omitempty"`
-	Spec                                 *SealSpecApplyConfiguration   `json:"spec,omitempty"`
-	Status                               *SealStatusApplyConfiguration `json:"status,omitempty"`
+	Spec                                 *NetworkConfigSpecApplyConfiguration   `json:"spec,omitempty"`
+	Status                               *NetworkConfigStatusApplyConfiguration `json:"status,omitempty"`
 }
 
-// Seal constructs a declarative configuration of the Seal type for use with
+// NetworkConfig constructs a declarative configuration of the NetworkConfig type for use with
 // apply.
-func Seal(name, namespace string) *SealApplyConfiguration {
-	b := &SealApplyConfiguration{}
+func NetworkConfig(name, namespace string) *NetworkConfigApplyConfiguration {
+	b := &NetworkConfigApplyConfiguration{}
 	b.WithName(name)
 	b.WithNamespace(namespace)
-	b.WithKind("Seal")
-	b.WithAPIVersion("seals.helmetica.io/v1")
+	b.WithKind("NetworkConfig")
+	b.WithAPIVersion("sigillum.helmetica.io/v1")
 	return b
 }
 
-// ExtractSealFrom extracts the applied configuration owned by fieldManager from
-// seal for the specified subresource. Pass an empty string for subresource to extract
+// ExtractNetworkConfigFrom extracts the applied configuration owned by fieldManager from
+// networkConfig for the specified subresource. Pass an empty string for subresource to extract
 // the main resource. Common subresources include "status", "scale", etc.
-// seal must be a unmodified Seal API object that was retrieved from the Kubernetes API.
-// ExtractSealFrom provides a way to perform a extract/modify-in-place/apply workflow.
+// networkConfig must be a unmodified NetworkConfig API object that was retrieved from the Kubernetes API.
+// ExtractNetworkConfigFrom provides a way to perform a extract/modify-in-place/apply workflow.
 // Note that an extracted apply configuration will contain fewer fields than what the fieldManager previously
 // applied if another fieldManager has updated or force applied any of the previously applied fields.
-func ExtractSealFrom(seal *apiv1.Seal, fieldManager string, subresource string) (*SealApplyConfiguration, error) {
-	b := &SealApplyConfiguration{}
-	err := managedfields.ExtractInto(seal, internal.Parser().Type("com.github.helmetica-framework.sigillum.api.v1.Seal"), fieldManager, b, subresource)
+func ExtractNetworkConfigFrom(networkConfig *apiv1.NetworkConfig, fieldManager string, subresource string) (*NetworkConfigApplyConfiguration, error) {
+	b := &NetworkConfigApplyConfiguration{}
+	err := managedfields.ExtractInto(networkConfig, internal.Parser().Type("com.github.helmetica-framework.sigillum.api.v1.NetworkConfig"), fieldManager, b, subresource)
 	if err != nil {
 		return nil, err
 	}
-	b.WithName(seal.Name)
-	b.WithNamespace(seal.Namespace)
+	b.WithName(networkConfig.Name)
+	b.WithNamespace(networkConfig.Namespace)
 
-	b.WithKind("Seal")
-	b.WithAPIVersion("seals.helmetica.io/v1")
+	b.WithKind("NetworkConfig")
+	b.WithAPIVersion("sigillum.helmetica.io/v1")
 	return b, nil
 }
 
-// ExtractSeal extracts the applied configuration owned by fieldManager from
-// seal. If no managedFields are found in seal for fieldManager, a
-// SealApplyConfiguration is returned with only the Name, Namespace (if applicable),
+// ExtractNetworkConfig extracts the applied configuration owned by fieldManager from
+// networkConfig. If no managedFields are found in networkConfig for fieldManager, a
+// NetworkConfigApplyConfiguration is returned with only the Name, Namespace (if applicable),
 // APIVersion and Kind populated. It is possible that no managed fields were found for because other
 // field managers have taken ownership of all the fields previously owned by fieldManager, or because
 // the fieldManager never owned fields any fields.
-// seal must be a unmodified Seal API object that was retrieved from the Kubernetes API.
-// ExtractSeal provides a way to perform a extract/modify-in-place/apply workflow.
+// networkConfig must be a unmodified NetworkConfig API object that was retrieved from the Kubernetes API.
+// ExtractNetworkConfig provides a way to perform a extract/modify-in-place/apply workflow.
 // Note that an extracted apply configuration will contain fewer fields than what the fieldManager previously
 // applied if another fieldManager has updated or force applied any of the previously applied fields.
-func ExtractSeal(seal *apiv1.Seal, fieldManager string) (*SealApplyConfiguration, error) {
-	return ExtractSealFrom(seal, fieldManager, "")
+func ExtractNetworkConfig(networkConfig *apiv1.NetworkConfig, fieldManager string) (*NetworkConfigApplyConfiguration, error) {
+	return ExtractNetworkConfigFrom(networkConfig, fieldManager, "")
 }
 
-// ExtractSealStatus extracts the applied configuration owned by fieldManager from
-// seal for the status subresource.
-func ExtractSealStatus(seal *apiv1.Seal, fieldManager string) (*SealApplyConfiguration, error) {
-	return ExtractSealFrom(seal, fieldManager, "status")
+// ExtractNetworkConfigStatus extracts the applied configuration owned by fieldManager from
+// networkConfig for the status subresource.
+func ExtractNetworkConfigStatus(networkConfig *apiv1.NetworkConfig, fieldManager string) (*NetworkConfigApplyConfiguration, error) {
+	return ExtractNetworkConfigFrom(networkConfig, fieldManager, "status")
 }
 
-func (b SealApplyConfiguration) IsApplyConfiguration() {}
+func (b NetworkConfigApplyConfiguration) IsApplyConfiguration() {}
 
 // WithKind sets the Kind field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Kind field is set to the value of the last call.
-func (b *SealApplyConfiguration) WithKind(value string) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithKind(value string) *NetworkConfigApplyConfiguration {
 	b.TypeMetaApplyConfiguration.Kind = &value
 	return b
 }
@@ -87,7 +87,7 @@ func (b *SealApplyConfiguration) WithKind(value string) *SealApplyConfiguration 
 // WithAPIVersion sets the APIVersion field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the APIVersion field is set to the value of the last call.
-func (b *SealApplyConfiguration) WithAPIVersion(value string) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithAPIVersion(value string) *NetworkConfigApplyConfiguration {
 	b.TypeMetaApplyConfiguration.APIVersion = &value
 	return b
 }
@@ -95,7 +95,7 @@ func (b *SealApplyConfiguration) WithAPIVersion(value string) *SealApplyConfigur
 // WithName sets the Name field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Name field is set to the value of the last call.
-func (b *SealApplyConfiguration) WithName(value string) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithName(value string) *NetworkConfigApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.Name = &value
 	return b
@@ -104,7 +104,7 @@ func (b *SealApplyConfiguration) WithName(value string) *SealApplyConfiguration 
 // WithGenerateName sets the GenerateName field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the GenerateName field is set to the value of the last call.
-func (b *SealApplyConfiguration) WithGenerateName(value string) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithGenerateName(value string) *NetworkConfigApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.GenerateName = &value
 	return b
@@ -113,7 +113,7 @@ func (b *SealApplyConfiguration) WithGenerateName(value string) *SealApplyConfig
 // WithNamespace sets the Namespace field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Namespace field is set to the value of the last call.
-func (b *SealApplyConfiguration) WithNamespace(value string) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithNamespace(value string) *NetworkConfigApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.Namespace = &value
 	return b
@@ -122,7 +122,7 @@ func (b *SealApplyConfiguration) WithNamespace(value string) *SealApplyConfigura
 // WithUID sets the UID field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the UID field is set to the value of the last call.
-func (b *SealApplyConfiguration) WithUID(value types.UID) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithUID(value types.UID) *NetworkConfigApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.UID = &value
 	return b
@@ -131,7 +131,7 @@ func (b *SealApplyConfiguration) WithUID(value types.UID) *SealApplyConfiguratio
 // WithResourceVersion sets the ResourceVersion field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the ResourceVersion field is set to the value of the last call.
-func (b *SealApplyConfiguration) WithResourceVersion(value string) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithResourceVersion(value string) *NetworkConfigApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.ResourceVersion = &value
 	return b
@@ -140,7 +140,7 @@ func (b *SealApplyConfiguration) WithResourceVersion(value string) *SealApplyCon
 // WithGeneration sets the Generation field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Generation field is set to the value of the last call.
-func (b *SealApplyConfiguration) WithGeneration(value int64) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithGeneration(value int64) *NetworkConfigApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.Generation = &value
 	return b
@@ -149,7 +149,7 @@ func (b *SealApplyConfiguration) WithGeneration(value int64) *SealApplyConfigura
 // WithCreationTimestamp sets the CreationTimestamp field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the CreationTimestamp field is set to the value of the last call.
-func (b *SealApplyConfiguration) WithCreationTimestamp(value apismetav1.Time) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithCreationTimestamp(value apismetav1.Time) *NetworkConfigApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.CreationTimestamp = &value
 	return b
@@ -158,7 +158,7 @@ func (b *SealApplyConfiguration) WithCreationTimestamp(value apismetav1.Time) *S
 // WithDeletionTimestamp sets the DeletionTimestamp field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the DeletionTimestamp field is set to the value of the last call.
-func (b *SealApplyConfiguration) WithDeletionTimestamp(value apismetav1.Time) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithDeletionTimestamp(value apismetav1.Time) *NetworkConfigApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.DeletionTimestamp = &value
 	return b
@@ -167,7 +167,7 @@ func (b *SealApplyConfiguration) WithDeletionTimestamp(value apismetav1.Time) *S
 // WithDeletionGracePeriodSeconds sets the DeletionGracePeriodSeconds field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the DeletionGracePeriodSeconds field is set to the value of the last call.
-func (b *SealApplyConfiguration) WithDeletionGracePeriodSeconds(value int64) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithDeletionGracePeriodSeconds(value int64) *NetworkConfigApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	b.ObjectMetaApplyConfiguration.DeletionGracePeriodSeconds = &value
 	return b
@@ -177,7 +177,7 @@ func (b *SealApplyConfiguration) WithDeletionGracePeriodSeconds(value int64) *Se
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, the entries provided by each call will be put on the Labels field,
 // overwriting an existing map entries in Labels field with the same key.
-func (b *SealApplyConfiguration) WithLabels(entries map[string]string) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithLabels(entries map[string]string) *NetworkConfigApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	if b.ObjectMetaApplyConfiguration.Labels == nil && len(entries) > 0 {
 		b.ObjectMetaApplyConfiguration.Labels = make(map[string]string, len(entries))
@@ -192,7 +192,7 @@ func (b *SealApplyConfiguration) WithLabels(entries map[string]string) *SealAppl
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, the entries provided by each call will be put on the Annotations field,
 // overwriting an existing map entries in Annotations field with the same key.
-func (b *SealApplyConfiguration) WithAnnotations(entries map[string]string) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithAnnotations(entries map[string]string) *NetworkConfigApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	if b.ObjectMetaApplyConfiguration.Annotations == nil && len(entries) > 0 {
 		b.ObjectMetaApplyConfiguration.Annotations = make(map[string]string, len(entries))
@@ -206,7 +206,7 @@ func (b *SealApplyConfiguration) WithAnnotations(entries map[string]string) *Sea
 // WithOwnerReferences adds the given value to the OwnerReferences field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the OwnerReferences field.
-func (b *SealApplyConfiguration) WithOwnerReferences(values ...*metav1.OwnerReferenceApplyConfiguration) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithOwnerReferences(values ...*metav1.OwnerReferenceApplyConfiguration) *NetworkConfigApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	for i := range values {
 		if values[i] == nil {
@@ -220,7 +220,7 @@ func (b *SealApplyConfiguration) WithOwnerReferences(values ...*metav1.OwnerRefe
 // WithFinalizers adds the given value to the Finalizers field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Finalizers field.
-func (b *SealApplyConfiguration) WithFinalizers(values ...string) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithFinalizers(values ...string) *NetworkConfigApplyConfiguration {
 	b.ensureObjectMetaApplyConfigurationExists()
 	for i := range values {
 		b.ObjectMetaApplyConfiguration.Finalizers = append(b.ObjectMetaApplyConfiguration.Finalizers, values[i])
@@ -228,7 +228,7 @@ func (b *SealApplyConfiguration) WithFinalizers(values ...string) *SealApplyConf
 	return b
 }
 
-func (b *SealApplyConfiguration) ensureObjectMetaApplyConfigurationExists() {
+func (b *NetworkConfigApplyConfiguration) ensureObjectMetaApplyConfigurationExists() {
 	if b.ObjectMetaApplyConfiguration == nil {
 		b.ObjectMetaApplyConfiguration = &metav1.ObjectMetaApplyConfiguration{}
 	}
@@ -237,7 +237,7 @@ func (b *SealApplyConfiguration) ensureObjectMetaApplyConfigurationExists() {
 // WithSpec sets the Spec field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Spec field is set to the value of the last call.
-func (b *SealApplyConfiguration) WithSpec(value *SealSpecApplyConfiguration) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithSpec(value *NetworkConfigSpecApplyConfiguration) *NetworkConfigApplyConfiguration {
 	b.Spec = value
 	return b
 }
@@ -245,29 +245,29 @@ func (b *SealApplyConfiguration) WithSpec(value *SealSpecApplyConfiguration) *Se
 // WithStatus sets the Status field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Status field is set to the value of the last call.
-func (b *SealApplyConfiguration) WithStatus(value *SealStatusApplyConfiguration) *SealApplyConfiguration {
+func (b *NetworkConfigApplyConfiguration) WithStatus(value *NetworkConfigStatusApplyConfiguration) *NetworkConfigApplyConfiguration {
 	b.Status = value
 	return b
 }
 
 // GetKind retrieves the value of the Kind field in the declarative configuration.
-func (b *SealApplyConfiguration) GetKind() *string {
+func (b *NetworkConfigApplyConfiguration) GetKind() *string {
 	return b.TypeMetaApplyConfiguration.Kind
 }
 
 // GetAPIVersion retrieves the value of the APIVersion field in the declarative configuration.
-func (b *SealApplyConfiguration) GetAPIVersion() *string {
+func (b *NetworkConfigApplyConfiguration) GetAPIVersion() *string {
 	return b.TypeMetaApplyConfiguration.APIVersion
 }
 
 // GetName retrieves the value of the Name field in the declarative configuration.
-func (b *SealApplyConfiguration) GetName() *string {
+func (b *NetworkConfigApplyConfiguration) GetName() *string {
 	b.ensureObjectMetaApplyConfigurationExists()
 	return b.ObjectMetaApplyConfiguration.Name
 }
 
 // GetNamespace retrieves the value of the Namespace field in the declarative configuration.
-func (b *SealApplyConfiguration) GetNamespace() *string {
+func (b *NetworkConfigApplyConfiguration) GetNamespace() *string {
 	b.ensureObjectMetaApplyConfigurationExists()
 	return b.ObjectMetaApplyConfiguration.Namespace
 }
