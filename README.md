@@ -1,6 +1,6 @@
 # Sigillum
 
-**Sigillum**: a seal, the mark an alchemist presses into wax to close a
+**Sigillum**: a network config, the mark an alchemist presses into wax to close a
 vessel and show it hasn't been tampered with.
 
 Sigillum handles all network related configurations, so that helmetica managed services are securely accessible.
@@ -14,20 +14,20 @@ kubectl apply -k config/crd
 kubectl label namespace default chrysopoeia.io/instance=
 just run          # in a second terminal
 kubectl apply -k config/samples
-kubectl get seals -w   # PHASE -> Ready
+kubectl get network configs -w   # PHASE -> Ready
 kubectl get networkpolicy allow-service-access -o yaml
 ```
 
-The sample creates a `Seal` named `sample` that allows ingress from
+The sample creates a `NetworkConfig` named `sample` that allows ingress from
 `some-namespace` and asks for one TCP exposure. The controller writes a
-`NetworkPolicy` named `allow-service-access` into the seal's namespace and
+`NetworkPolicy` named `allow-service-access` into the network config's namespace and
 sets the phase to `Ready` once the exposure is ready.
 
 Ingress peers come from three places:
 
 | Source | Effect |
 | ------ | ------ |
-| The `chrysopoeia.io/claim-namespace` annotation on the seal's own namespace | Adds a peer for the claim namespace. |
+| The `chrysopoeia.io/claim-namespace` annotation on the network config's own namespace | Adds a peer for the claim namespace. |
 | `spec.allowedNamespaces` | Adds a peer per named namespace. |
 | `spec.allowAllNamespaces: true` | A single `namespaceSelector: {}` peer, matching every namespace in the cluster. Overrides the other two. Traffic from outside the cluster stays blocked. |
 
@@ -49,7 +49,7 @@ different exposures.
 
 ## Exposures
 
-An entry in `spec.expose` exposes a way into the seal's namespace from
+An entry in `spec.expose` exposes a way into the network config's namespace from
 outside the cluster. Only TCP is supported for now. HTTP and HTTPS exposures
 are not yet implemented.
 
@@ -65,8 +65,8 @@ spec:
 
 There is no port field: for each exposure, sigillum picks a shard Gateway
 with room and a free port from the class's `portRange`, and writes a
-ListenerSet and a TCPRoute named `<seal>-<exposure>`. Each exposure is placed
-on its own, so exposures of one Seal can land on different shards, and each
+ListenerSet and a TCPRoute named `<network config>-<exposure>`. Each exposure is placed
+on its own, so exposures of one NetworkConfig can land on different shards, and each
 one's shard, address, port and URL show up in `status.exposures[]`.
 
 Sigillum never creates Gateways. Before an exposure can be ready, the
@@ -80,8 +80,8 @@ platform must provide:
 
 | Path | What's there |
 | ---- | ------------- |
-| `api/v1` | The `Seal` and `ExposureClass` types (`seals.helmetica.io/v1`): spec, status and generated deepcopy code. |
-| `cmd` | The `sigillum` CLI (cobra): `root.go` wires the binary, `controller.go` is the `sigillum controller` subcommand that builds the manager and registers `SealManager`. |
-| `controllers` | `SealManager`, the reconciler for `Seal`. `desiredPhase` writes the `NetworkPolicy`; `ingressPeers` decides who gets in. |
+| `api/v1` | The `NetworkConfig` and `ExposureClass` types (`sigillum.helmetica.io/v1`): spec, status and generated deepcopy code. |
+| `cmd` | The `sigillum` CLI (cobra): `root.go` wires the binary, `controller.go` is the `sigillum controller` subcommand that builds the manager and registers `NetworkConfigManager`. |
+| `controllers` | `NetworkConfigManager`, the reconciler for `NetworkConfig`. `desiredPhase` writes the `NetworkPolicy`; `ingressPeers` decides who gets in. |
 | `controllers/gatewayapi` | Builders and status readers for the Gateway API objects (ListenerSet, TCPRoute, Gateway), on top of the upstream `sigs.k8s.io/gateway-api` types. |
 | `config` | Kustomize tree: `crd` (the CRD manifests, installed separately), `rbac`, `manager`, `default` (RBAC + manager, no CRDs) and `samples`. |

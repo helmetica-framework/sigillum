@@ -6,10 +6,10 @@ import (
 	apiv1 "github.com/helmetica-framework/sigillum/api/v1"
 )
 
-// SealStatusApplyConfiguration represents a declarative configuration of the SealStatus type for use
+// NetworkConfigStatusApplyConfiguration represents a declarative configuration of the NetworkConfigStatus type for use
 // with apply.
-type SealStatusApplyConfiguration struct {
-	Phase *apiv1.SealPhase `json:"phase,omitempty"`
+type NetworkConfigStatusApplyConfiguration struct {
+	Phase *apiv1.NetworkConfigPhase `json:"phase,omitempty"`
 	// ObservedGeneration is the spec generation the phase was computed from.
 	ObservedGeneration *int64 `json:"observedGeneration,omitempty"`
 	// Message explains a Failed phase.
@@ -21,16 +21,16 @@ type SealStatusApplyConfiguration struct {
 	Exposures []ExposureStatusApplyConfiguration `json:"exposures,omitempty"`
 }
 
-// SealStatusApplyConfiguration constructs a declarative configuration of the SealStatus type for use with
+// NetworkConfigStatusApplyConfiguration constructs a declarative configuration of the NetworkConfigStatus type for use with
 // apply.
-func SealStatus() *SealStatusApplyConfiguration {
-	return &SealStatusApplyConfiguration{}
+func NetworkConfigStatus() *NetworkConfigStatusApplyConfiguration {
+	return &NetworkConfigStatusApplyConfiguration{}
 }
 
 // WithPhase sets the Phase field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Phase field is set to the value of the last call.
-func (b *SealStatusApplyConfiguration) WithPhase(value apiv1.SealPhase) *SealStatusApplyConfiguration {
+func (b *NetworkConfigStatusApplyConfiguration) WithPhase(value apiv1.NetworkConfigPhase) *NetworkConfigStatusApplyConfiguration {
 	b.Phase = &value
 	return b
 }
@@ -38,7 +38,7 @@ func (b *SealStatusApplyConfiguration) WithPhase(value apiv1.SealPhase) *SealSta
 // WithObservedGeneration sets the ObservedGeneration field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the ObservedGeneration field is set to the value of the last call.
-func (b *SealStatusApplyConfiguration) WithObservedGeneration(value int64) *SealStatusApplyConfiguration {
+func (b *NetworkConfigStatusApplyConfiguration) WithObservedGeneration(value int64) *NetworkConfigStatusApplyConfiguration {
 	b.ObservedGeneration = &value
 	return b
 }
@@ -46,7 +46,7 @@ func (b *SealStatusApplyConfiguration) WithObservedGeneration(value int64) *Seal
 // WithMessage sets the Message field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the Message field is set to the value of the last call.
-func (b *SealStatusApplyConfiguration) WithMessage(value string) *SealStatusApplyConfiguration {
+func (b *NetworkConfigStatusApplyConfiguration) WithMessage(value string) *NetworkConfigStatusApplyConfiguration {
 	b.Message = &value
 	return b
 }
@@ -54,7 +54,7 @@ func (b *SealStatusApplyConfiguration) WithMessage(value string) *SealStatusAppl
 // WithExposures adds the given value to the Exposures field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Exposures field.
-func (b *SealStatusApplyConfiguration) WithExposures(values ...*ExposureStatusApplyConfiguration) *SealStatusApplyConfiguration {
+func (b *NetworkConfigStatusApplyConfiguration) WithExposures(values ...*ExposureStatusApplyConfiguration) *NetworkConfigStatusApplyConfiguration {
 	for i := range values {
 		if values[i] == nil {
 			panic("nil value passed to WithExposures")

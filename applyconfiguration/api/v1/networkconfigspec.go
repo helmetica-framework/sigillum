@@ -2,13 +2,13 @@
 
 package v1
 
-// SealSpecApplyConfiguration represents a declarative configuration of the SealSpec type for use
+// NetworkConfigSpecApplyConfiguration represents a declarative configuration of the NetworkConfigSpec type for use
 // with apply.
 //
-// SealSpec describes who may reach the sealed namespace.
-type SealSpecApplyConfiguration struct {
+// NetworkConfigSpec describes who may reach the sealed namespace.
+type NetworkConfigSpecApplyConfiguration struct {
 	// AllowedNamespaces names the namespaces that may reach this one, on top of
-	// the claim namespace the seal's own namespace is annotated with. Ignored
+	// the claim namespace the network config's own namespace is annotated with. Ignored
 	// when AllowAllNamespaces is true.
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
 	// AllowAllNamespaces allows access from every namespace in the cluster,
@@ -22,16 +22,16 @@ type SealSpecApplyConfiguration struct {
 	Expose []ExposureApplyConfiguration `json:"expose,omitempty"`
 }
 
-// SealSpecApplyConfiguration constructs a declarative configuration of the SealSpec type for use with
+// NetworkConfigSpecApplyConfiguration constructs a declarative configuration of the NetworkConfigSpec type for use with
 // apply.
-func SealSpec() *SealSpecApplyConfiguration {
-	return &SealSpecApplyConfiguration{}
+func NetworkConfigSpec() *NetworkConfigSpecApplyConfiguration {
+	return &NetworkConfigSpecApplyConfiguration{}
 }
 
 // WithAllowedNamespaces adds the given value to the AllowedNamespaces field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the AllowedNamespaces field.
-func (b *SealSpecApplyConfiguration) WithAllowedNamespaces(values ...string) *SealSpecApplyConfiguration {
+func (b *NetworkConfigSpecApplyConfiguration) WithAllowedNamespaces(values ...string) *NetworkConfigSpecApplyConfiguration {
 	for i := range values {
 		b.AllowedNamespaces = append(b.AllowedNamespaces, values[i])
 	}
@@ -41,7 +41,7 @@ func (b *SealSpecApplyConfiguration) WithAllowedNamespaces(values ...string) *Se
 // WithAllowAllNamespaces sets the AllowAllNamespaces field in the declarative configuration to the given value
 // and returns the receiver, so that objects can be built by chaining "With" function invocations.
 // If called multiple times, the AllowAllNamespaces field is set to the value of the last call.
-func (b *SealSpecApplyConfiguration) WithAllowAllNamespaces(value bool) *SealSpecApplyConfiguration {
+func (b *NetworkConfigSpecApplyConfiguration) WithAllowAllNamespaces(value bool) *NetworkConfigSpecApplyConfiguration {
 	b.AllowAllNamespaces = &value
 	return b
 }
@@ -49,7 +49,7 @@ func (b *SealSpecApplyConfiguration) WithAllowAllNamespaces(value bool) *SealSpe
 // WithExpose adds the given value to the Expose field in the declarative configuration
 // and returns the receiver, so that objects can be build by chaining "With" function invocations.
 // If called multiple times, values provided by each call will be appended to the Expose field.
-func (b *SealSpecApplyConfiguration) WithExpose(values ...*ExposureApplyConfiguration) *SealSpecApplyConfiguration {
+func (b *NetworkConfigSpecApplyConfiguration) WithExpose(values ...*ExposureApplyConfiguration) *NetworkConfigSpecApplyConfiguration {
 	for i := range values {
 		if values[i] == nil {
 			panic("nil value passed to WithExpose")

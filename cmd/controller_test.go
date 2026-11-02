@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/require"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
+	sigillumv1 "github.com/helmetica-framework/sigillum/api/v1"
 )
 
 func TestControllerCmd_LeaderElectionDefaultsToOn(t *testing.T) {
@@ -27,9 +27,9 @@ func TestNewScheme_KnowsTheGatewayKinds(t *testing.T) {
 	}
 }
 
-func TestNewScheme_StillKnowsSeal(t *testing.T) {
+func TestNewScheme_StillKnowsNetworkConfig(t *testing.T) {
 	scheme := newScheme()
 
-	assert.True(t, scheme.Recognizes(sealsv1.GroupVersion.WithKind("Seal")))
-	assert.True(t, scheme.Recognizes(sealsv1.GroupVersion.WithKind("ExposureClass")))
+	assert.True(t, scheme.Recognizes(sigillumv1.GroupVersion.WithKind("NetworkConfig")))
+	assert.True(t, scheme.Recognizes(sigillumv1.GroupVersion.WithKind("ExposureClass")))
 }

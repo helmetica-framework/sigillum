@@ -32,8 +32,8 @@ type Listener struct {
 
 // ListenerSetName is the name of the ListenerSet that holds one exposure's
 // listener. It is the same as the exposure's TCPRoute name.
-func ListenerSetName(sealName, exposureName string) string {
-	return RouteName(sealName, exposureName)
+func ListenerSetName(networkConfigName, exposureName string) string {
+	return RouteName(networkConfigName, exposureName)
 }
 
 // ListenerState is what the gateway controller last said about one listener's
@@ -68,7 +68,7 @@ func BuildListenerSet(
 	}
 
 	// A nameless parent reads back as no parent at all, so this set's ports
-	// would count against no shard and be handed to a second Seal.
+	// would count against no shard and be handed to a second NetworkConfig.
 	if parent.Name == "" {
 		return nil, fmt.Errorf("listenerset %s/%s: parent shard has no name", namespace, name)
 	}

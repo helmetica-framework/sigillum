@@ -1,5 +1,5 @@
-apiVersion: seals.helmetica.io/v1
-kind: Seal
+apiVersion: sigillum.helmetica.io/v1
+kind: NetworkConfig
 metadata:
   name: sample
 spec:

@@ -59,7 +59,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - seals.helmetica.io
+  - sigillum.helmetica.io
   resources:
   - exposureclasses
   verbs:
@@ -67,9 +67,9 @@ rules:
   - list
   - watch
 - apiGroups:
-  - seals.helmetica.io
+  - sigillum.helmetica.io
   resources:
-  - seals
+  - networkconfigs
   verbs:
   - get
   - list
@@ -77,9 +77,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - seals.helmetica.io
+  - sigillum.helmetica.io
   resources:
-  - seals/status
+  - networkconfigs/status
   verbs:
   - get
   - patch

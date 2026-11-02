@@ -25,7 +25,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	//+kubebuilder:scaffold:imports
-	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
+	sigillumv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"github.com/helmetica-framework/sigillum/controllers"
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 )
@@ -73,7 +73,7 @@ var controllerCmd = &cobra.Command{
 
 func newScheme() *runtime.Scheme {
 	scheme := runtime.NewScheme()
-	utilruntime.Must(sealsv1.AddToScheme(scheme))
+	utilruntime.Must(sigillumv1.AddToScheme(scheme))
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(gatewayapi.Register(scheme))
 	//+kubebuilder:scaffold:scheme
@@ -142,7 +142,7 @@ func runController(cmd *cobra.Command, _ []string) error {
 		Metrics:                metricsServerOptions,
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "sigillum.seals.helmetica.io",
+		LeaderElectionID:       "sigillum.helmetica.io",
 
 		LeaderElectionReleaseOnCancel: true,
 	})
@@ -160,19 +160,19 @@ func runController(cmd *cobra.Command, _ []string) error {
 		cmd.Println("Gateway API CRDs not found, exposures are disabled. Restart sigillum after installing them.")
 	}
 
-	sm := controllers.SealManager{
+	sm := controllers.NetworkConfigManager{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorder("seal-controller"),
-		Log:       mgr.GetLogger().WithName("seal-controller"),
+		Recorder:  mgr.GetEventRecorder("networkconfig-controller"),
+		Log:       mgr.GetLogger().WithName("networkconfig-controller"),
 		APIReader: mgr.GetAPIReader(),
 		Rand:      rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
 
 		NoGatewayAPI: !hasGatewayAPI,
 	}
 
-	if err := sm.SetupWithManager(lifetimeCtx, "seal", mgr); err != nil {
-		return fmt.Errorf("unable to create Seal controller: %w", err)
+	if err := sm.SetupWithManager(lifetimeCtx, "networkconfig", mgr); err != nil {
+		return fmt.Errorf("unable to create NetworkConfig controller: %w", err)
 	}
 
 	//+kubebuilder:scaffold:builder

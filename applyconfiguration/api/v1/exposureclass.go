@@ -32,7 +32,7 @@ func ExposureClass(name string) *ExposureClassApplyConfiguration {
 	b := &ExposureClassApplyConfiguration{}
 	b.WithName(name)
 	b.WithKind("ExposureClass")
-	b.WithAPIVersion("seals.helmetica.io/v1")
+	b.WithAPIVersion("sigillum.helmetica.io/v1")
 	return b
 }
 
@@ -52,7 +52,7 @@ func ExtractExposureClassFrom(exposureClass *apiv1.ExposureClass, fieldManager s
 	b.WithName(exposureClass.Name)
 
 	b.WithKind("ExposureClass")
-	b.WithAPIVersion("seals.helmetica.io/v1")
+	b.WithAPIVersion("sigillum.helmetica.io/v1")
 	return b, nil
 }
 

@@ -9,7 +9,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
+	sigillumv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -34,7 +34,7 @@ func effectiveMax(limit int32) int32 {
 // A nil shardSelector matches nothing, not everything. metav1 spells those two
 // differently on purpose, and a class with no selector pulling in every Gateway
 // in the cluster would be a very bad surprise.
-func (r *SealManager) listShards(ctx context.Context, class *sealsv1.ExposureClass) ([]gatewayapi.ShardRef, error) {
+func (r *NetworkConfigManager) listShards(ctx context.Context, class *sigillumv1.ExposureClass) ([]gatewayapi.ShardRef, error) {
 	selector, err := metav1.LabelSelectorAsSelector(class.Spec.ShardSelector)
 	if err != nil {
 		return nil, fmt.Errorf("parsing shard selector: %w", err)
@@ -87,7 +87,7 @@ func shardCounts(sets []gwv1.ListenerSet) map[gatewayapi.ShardRef]int {
 	return counts
 }
 
-// stickyShard reports the shard this Seal's own ListenerSet already sits on,
+// stickyShard reports the shard this NetworkConfig's own ListenerSet already sits on,
 // when that shard still matches the class selector.
 //
 // A false result means the exposure moves and its address changes. The new
@@ -111,11 +111,11 @@ func stickyShard(own *gwv1.ListenerSet, shards []gatewayapi.ShardRef) (gatewayap
 //
 // Every shard being full is an error rather than a retry: creating gateways is
 // out of scope, so nothing the controller does later can fix it. The message
-// has to name the action, because the Seal's owner cannot take it themselves.
+// has to name the action, because the NetworkConfig's owner cannot take it themselves.
 func placeExposure(
 	shards []gatewayapi.ShardRef,
 	counts map[gatewayapi.ShardRef]int,
-	class *sealsv1.ExposureClass,
+	class *sigillumv1.ExposureClass,
 ) (gatewayapi.ShardRef, error) {
 	if len(shards) == 0 {
 		return gatewayapi.ShardRef{}, fmt.Errorf(
@@ -145,7 +145,7 @@ func placeExposure(
 // selectorText renders a class's shardSelector the way an operator would type
 // it as a label on a Gateway. The LabelSelector struct's own String is a Go
 // dump, which is not something anyone can copy into a manifest.
-func selectorText(class *sealsv1.ExposureClass) string {
+func selectorText(class *sigillumv1.ExposureClass) string {
 	selector, err := metav1.LabelSelectorAsSelector(class.Spec.ShardSelector)
 	if err != nil {
 		return "<invalid shardSelector>"

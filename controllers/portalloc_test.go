@@ -13,7 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 
-	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
+	sigillumv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 )
 
@@ -58,7 +58,7 @@ func bareSet(name, namespace string) *gwv1.ListenerSet {
 	return &gwv1.ListenerSet{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}}
 }
 
-func portRange() sealsv1.PortRange { return sealsv1.PortRange{From: 30000, To: 30255} }
+func portRange() sigillumv1.PortRange { return sigillumv1.PortRange{From: 30000, To: 30255} }
 
 func seeded() *rand.Rand { return rand.New(rand.NewPCG(1, 42)) }
 
@@ -188,19 +188,19 @@ func TestAllocatePort_FullRangeIsAnError(t *testing.T) {
 	_, err := allocatePort(portRange(), taken, seeded())
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "30000", "the message reaches the user as the seal status")
+	assert.Contains(t, err.Error(), "30000", "the message reaches the user as the network config status")
 	assert.Contains(t, err.Error(), "30255")
 }
 
 func TestAllocatePort_SinglePortRange(t *testing.T) {
-	got, err := allocatePort(sealsv1.PortRange{From: 30007, To: 30007}, nil, seeded())
+	got, err := allocatePort(sigillumv1.PortRange{From: 30007, To: 30007}, nil, seeded())
 
 	require.NoError(t, err)
 	assert.Equal(t, int32(30007), got)
 }
 
 func TestAllocatePort_SinglePortRangeAlreadyTaken(t *testing.T) {
-	_, err := allocatePort(sealsv1.PortRange{From: 30007, To: 30007},
+	_, err := allocatePort(sigillumv1.PortRange{From: 30007, To: 30007},
 		map[int32]struct{}{30007: {}}, seeded())
 
 	require.Error(t, err)
@@ -295,7 +295,7 @@ func TestListAllListenerSets_LivePicksTheAPIReader(t *testing.T) {
 	cached := listenerSet(t, "stale", "ns-a", "tcp-0", 30000)
 	fresh := listenerSet(t, "fresh", "ns-b", "tcp-0", 30001)
 
-	m := &SealManager{
+	m := &NetworkConfigManager{
 		Client:    fake.NewClientBuilder().WithScheme(scheme).WithObjects(&cached).Build(),
 		APIReader: fake.NewClientBuilder().WithScheme(scheme).WithObjects(&fresh).Build(),
 		Scheme:    scheme,
@@ -390,5 +390,5 @@ func TestConflictMessage_NamesTheExposurePortAndShard(t *testing.T) {
 	assert.Contains(t, msg, "30007")
 	assert.Contains(t, msg, "kgateway-system/tcp-0")
 	assert.Contains(t, msg, "platform operator",
-		"the seal's owner cannot fix a shard, so the message must say who can")
+		"the network config's owner cannot fix a shard, so the message must say who can")
 }

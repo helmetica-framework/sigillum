@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 
-	sealsv1 "github.com/helmetica-framework/sigillum/api/v1"
+	sigillumv1 "github.com/helmetica-framework/sigillum/api/v1"
 	"github.com/helmetica-framework/sigillum/controllers/gatewayapi"
 	gwv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
@@ -63,7 +63,7 @@ func takenPortsWithConflicts(
 	return taken
 }
 
-func (r *SealManager) random() *rand.Rand {
+func (r *NetworkConfigManager) random() *rand.Rand {
 	if r.Rand == nil {
 		r.Rand = rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	}
@@ -76,7 +76,7 @@ func (r *SealManager) random() *rand.Rand {
 // The choice is random rather than lowest-first so a just-released port is
 // unlikely to be handed straight to a different service while clients still
 // hold connections to the old one.
-func allocatePort(rng sealsv1.PortRange, taken map[int32]struct{}, rnd *rand.Rand) (int32, error) {
+func allocatePort(rng sigillumv1.PortRange, taken map[int32]struct{}, rnd *rand.Rand) (int32, error) {
 	free := make([]int32, 0, rng.To-rng.From+1)
 
 	for p := rng.From; p <= rng.To; p++ {
@@ -97,12 +97,12 @@ func allocatePort(rng sealsv1.PortRange, taken map[int32]struct{}, rnd *rand.Ran
 //
 // APIReader, not Client, when live: the cache has not seen the ListenerSet this
 // same controller wrote a moment ago, so a cached list hands the same port to
-// the next Seal.
+// the next NetworkConfig.
 //
 // The caller passes live only when an exposure actually needs a new port. A
-// settled Seal allocates nothing, and an uncached cluster-wide List on every
-// reconcile of every Seal does not scale.
-func (r *SealManager) listAllListenerSets(ctx context.Context, live bool) ([]gwv1.ListenerSet, error) {
+// settled NetworkConfig allocates nothing, and an uncached cluster-wide List on every
+// reconcile of every NetworkConfig does not scale.
+func (r *NetworkConfigManager) listAllListenerSets(ctx context.Context, live bool) ([]gwv1.ListenerSet, error) {
 	list := &gwv1.ListenerSetList{}
 
 	if live {

@@ -175,6 +175,66 @@ var schemaYAML = typed.YAMLObject(`types:
     - name: name
       type:
         scalar: string
+- name: com.github.helmetica-framework.sigillum.api.v1.NetworkConfig
+  map:
+    fields:
+    - name: apiVersion
+      type:
+        scalar: string
+    - name: kind
+      type:
+        scalar: string
+    - name: metadata
+      type:
+        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
+    - name: spec
+      type:
+        namedType: com.github.helmetica-framework.sigillum.api.v1.NetworkConfigSpec
+    - name: status
+      type:
+        namedType: com.github.helmetica-framework.sigillum.api.v1.NetworkConfigStatus
+- name: com.github.helmetica-framework.sigillum.api.v1.NetworkConfigPhase
+  scalar: string
+- name: com.github.helmetica-framework.sigillum.api.v1.NetworkConfigSpec
+  map:
+    fields:
+    - name: allowAllNamespaces
+      type:
+        scalar: boolean
+    - name: allowedNamespaces
+      type:
+        list:
+          elementType:
+            scalar: string
+          elementRelationship: atomic
+    - name: expose
+      type:
+        list:
+          elementType:
+            namedType: com.github.helmetica-framework.sigillum.api.v1.Exposure
+          elementRelationship: associative
+          keys:
+          - name
+- name: com.github.helmetica-framework.sigillum.api.v1.NetworkConfigStatus
+  map:
+    fields:
+    - name: exposures
+      type:
+        list:
+          elementType:
+            namedType: com.github.helmetica-framework.sigillum.api.v1.ExposureStatus
+          elementRelationship: associative
+          keys:
+          - name
+    - name: message
+      type:
+        scalar: string
+    - name: observedGeneration
+      type:
+        scalar: numeric
+    - name: phase
+      type:
+        namedType: com.github.helmetica-framework.sigillum.api.v1.NetworkConfigPhase
 - name: com.github.helmetica-framework.sigillum.api.v1.ParentRef
   map:
     fields:
@@ -195,66 +255,6 @@ var schemaYAML = typed.YAMLObject(`types:
         scalar: numeric
 - name: com.github.helmetica-framework.sigillum.api.v1.Protocol
   scalar: string
-- name: com.github.helmetica-framework.sigillum.api.v1.Seal
-  map:
-    fields:
-    - name: apiVersion
-      type:
-        scalar: string
-    - name: kind
-      type:
-        scalar: string
-    - name: metadata
-      type:
-        namedType: io.k8s.apimachinery.pkg.apis.meta.v1.ObjectMeta
-    - name: spec
-      type:
-        namedType: com.github.helmetica-framework.sigillum.api.v1.SealSpec
-    - name: status
-      type:
-        namedType: com.github.helmetica-framework.sigillum.api.v1.SealStatus
-- name: com.github.helmetica-framework.sigillum.api.v1.SealPhase
-  scalar: string
-- name: com.github.helmetica-framework.sigillum.api.v1.SealSpec
-  map:
-    fields:
-    - name: allowAllNamespaces
-      type:
-        scalar: boolean
-    - name: allowedNamespaces
-      type:
-        list:
-          elementType:
-            scalar: string
-          elementRelationship: atomic
-    - name: expose
-      type:
-        list:
-          elementType:
-            namedType: com.github.helmetica-framework.sigillum.api.v1.Exposure
-          elementRelationship: associative
-          keys:
-          - name
-- name: com.github.helmetica-framework.sigillum.api.v1.SealStatus
-  map:
-    fields:
-    - name: exposures
-      type:
-        list:
-          elementType:
-            namedType: com.github.helmetica-framework.sigillum.api.v1.ExposureStatus
-          elementRelationship: associative
-          keys:
-          - name
-    - name: message
-      type:
-        scalar: string
-    - name: observedGeneration
-      type:
-        scalar: numeric
-    - name: phase
-      type:
-        namedType: com.github.helmetica-framework.sigillum.api.v1.SealPhase
 - name: com.github.helmetica-framework.sigillum.api.v1.TLSMode
   scalar: string
 - name: io.k8s.apimachinery.pkg.apis.meta.v1.FieldsV1

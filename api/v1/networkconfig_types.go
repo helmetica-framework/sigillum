@@ -4,12 +4,12 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-type SealPhase string
+type NetworkConfigPhase string
 
 const (
-	SealPhasePending SealPhase = "Pending"
-	SealPhaseReady   SealPhase = "Ready"
-	SealPhaseFailed  SealPhase = "Failed"
+	NetworkConfigPhasePending NetworkConfigPhase = "Pending"
+	NetworkConfigPhaseReady   NetworkConfigPhase = "Ready"
+	NetworkConfigPhaseFailed  NetworkConfigPhase = "Failed"
 )
 
 // Protocol is what an exposure carries.
@@ -40,7 +40,7 @@ type Backend struct {
 // reports them in status; letting a user pick one would reintroduce the clash
 // this controller exists to prevent.
 type Exposure struct {
-	// Name identifies the exposure within this Seal. It becomes the listener
+	// Name identifies the exposure within this NetworkConfig. It becomes the listener
 	// and route name, so it has to be a DNS label.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=63
@@ -104,10 +104,10 @@ type ExposureStatus struct {
 	ConflictCount int32 `json:"conflictCount,omitempty"`
 }
 
-// SealSpec describes who may reach the sealed namespace.
-type SealSpec struct {
+// NetworkConfigSpec describes who may reach the sealed namespace.
+type NetworkConfigSpec struct {
 	// AllowedNamespaces names the namespaces that may reach this one, on top of
-	// the claim namespace the seal's own namespace is annotated with. Ignored
+	// the claim namespace the network config's own namespace is annotated with. Ignored
 	// when AllowAllNamespaces is true.
 	// +optional
 	AllowedNamespaces []string `json:"allowedNamespaces,omitempty"`
@@ -128,9 +128,9 @@ type SealSpec struct {
 	Expose []Exposure `json:"expose,omitempty"`
 }
 
-type SealStatus struct {
+type NetworkConfigStatus struct {
 	// +optional
-	Phase SealPhase `json:"phase,omitempty"`
+	Phase NetworkConfigPhase `json:"phase,omitempty"`
 	// ObservedGeneration is the spec generation the phase was computed from.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
@@ -148,28 +148,28 @@ type SealStatus struct {
 	Exposures []ExposureStatus `json:"exposures,omitempty"`
 }
 
-// Seal is sigillum's placeholder resource.
+// NetworkConfig is sigillum's placeholder resource.
 // +kubebuilder:object:root=true
 // +kubebuilder:ac:generate=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="All Namespaces",type=boolean,JSONPath=`.spec.allowAllNamespaces`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Message",type=string,JSONPath=`.status.message`
-type Seal struct {
+type NetworkConfig struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   SealSpec   `json:"spec,omitempty"`
-	Status SealStatus `json:"status,omitempty"`
+	Spec   NetworkConfigSpec   `json:"spec,omitempty"`
+	Status NetworkConfigStatus `json:"status,omitempty"`
 }
 
-// SealList contains a list of Seal.
+// NetworkConfigList contains a list of NetworkConfig.
 // +kubebuilder:object:root=true
-type SealList struct {
+type NetworkConfigList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 
-	Items []Seal `json:"items"`
+	Items []NetworkConfig `json:"items"`
 }
 
-func init() { SchemeBuilder.Register(&Seal{}, &SealList{}) }
+func init() { SchemeBuilder.Register(&NetworkConfig{}, &NetworkConfigList{}) }

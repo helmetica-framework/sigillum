@@ -4,14 +4,14 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.22.0
-  name: seals.seals.helmetica.io
+  name: networkconfigs.sigillum.helmetica.io
 spec:
-  group: seals.helmetica.io
+  group: sigillum.helmetica.io
   names:
-    kind: Seal
-    listKind: SealList
-    plural: seals
-    singular: seal
+    kind: NetworkConfig
+    listKind: NetworkConfigList
+    plural: networkconfigs
+    singular: networkconfig
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -27,7 +27,7 @@ spec:
     name: v1
     schema:
       openAPIV3Schema:
-        description: Seal is sigillum's placeholder resource.
+        description: NetworkConfig is sigillum's placeholder resource.
         properties:
           apiVersion:
             description: |-
@@ -47,7 +47,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: SealSpec describes who may reach the sealed namespace.
+            description: NetworkConfigSpec describes who may reach the sealed namespace.
             properties:
               allowAllNamespaces:
                 description: |-
@@ -58,7 +58,7 @@ spec:
               allowedNamespaces:
                 description: |-
                   AllowedNamespaces names the namespaces that may reach this one, on top of
-                  the claim namespace the seal's own namespace is annotated with. Ignored
+                  the claim namespace the network config's own namespace is annotated with. Ignored
                   when AllowAllNamespaces is true.
                 items:
                   type: string
@@ -101,7 +101,7 @@ spec:
                       type: string
                     name:
                       description: |-
-                        Name identifies the exposure within this Seal. It becomes the listener
+                        Name identifies the exposure within this NetworkConfig. It becomes the listener
                         and route name, so it has to be a DNS label.
                       maxLength: 63
                       minLength: 1
